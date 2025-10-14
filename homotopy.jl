@@ -1,46 +1,50 @@
 # solve_system.jl
-
-# To run this script, ensure you have Julia installed and the 
-# HomotopyContinuation.jl package added to your environment.
-# You can run it from the Julia REPL using: include("solve_system.jl")
-
 using HomotopyContinuation
 
-# 1. Define the polynomial variables using the @polyvar macro
-# This creates symbolic variables x and y
-@polyvar x y
+# declare variables
+@var x y
 
-# 2. Define the system of polynomial equations
-# F1: x^2 + y^2 - 1.0 = 0 (A circle)
-# F2: x^2 - y - 0.5 = 0 (A parabola)
+# system of polynomial equations
 F = [
-    x^2 + y^2 - 1.0,
-    x^2 - y - 0.5
+x^2 + y^2 - 1.0,   # circle
+x^2 - y - 0.5      # parabola
 ]
 
 println("--- Solving Polynomial System ---")
-println("System of equations:")
-println("  F1: $F[1]")
-println("  F2: $F[2]")
+println("  F1: ", F[1])
+println("  F2: ", F[2])
 
-# 3. Solve the system
+# solve
 result = solve(F)
 
-# 4. Print the results
+# extract solutions
+sols = solutions(result)
+
 println("\n--- Solution Results ---")
-println("Total number of paths tracked: $(result.ntracked)")
-println("Number of solutions found: $(result.nresults)")
+println("Number of solutions found: ", length(sols))
+
+# print solutions (showing small imaginary parts)
+function show_complex(z; tol = 1e-10)
+re = real(z); im = imag(z)
+if abs(im) < tol
+    return string(re)        # effectively real
+else
+    return "$(re) + $(im)im" # complex
+end
+end
 
 println("\n--- All Complex Solutions (x, y) ---")
+for (i, sol) in enumerate(sols)
+x_sol = sol[1]
+y_sol = sol[2]
+println("Solution $i:")
+println("  x = ", show_complex(x_sol))
+println("  y = ", show_complex(y_sol))
+end
 
-# The solutions() function extracts the complex solution vectors
-for (i, sol_vec) in enumerate(solutions(result))
-    # sol_vec is a vector containing the (x, y) coordinates
-    x_sol = sol_vec[1]
-    y_sol = sol_vec[2]
-
-    # Displaying the real and imaginary parts
-    println("Solution $i:")
-    println("  x = $(real(x_sol)) + $(imag(x_sol))i")
-    println("  y = $(real(y_sol)) + $(imag(y_sol))i")
+# optionally print only the (numerically) real solutions
+real_sols = [(real(sol[1]), real(sol[2])) for sol in sols if abs(imag(sol[1])) < 1e-8 && abs(imag(sol[2])) < 1e-8]
+println("\n--- Real Solutions (within tolerance) ---")
+for (i, (xr, yr)) in enumerate(real_sols)
+println("Real solution $i: x = $xr, y = $yr")
 end

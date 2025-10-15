@@ -49,13 +49,13 @@ def main(n: int) -> None:
     #     label = f"$n_{i+1}$"
     #     plt.plot(sol.t, sol[i], color=color, label=label)
         
-    plt.figure(figsize = (10, 10))
-    plt.ylabel("Concentration")
-    plt.xlabel("Time (s)")
-    plt.legend()
-    plt.minorticks_on()
-    plt.tight_layout()
-    plt.show()
+    # plt.figure(figsize = (10, 10))
+    # plt.ylabel("Concentration")
+    # plt.xlabel("Time (s)")
+    # plt.legend()
+    # plt.minorticks_on()
+    # plt.tight_layout()
+    # plt.show()
     
 if __name__ == "__main__":
     main(4)

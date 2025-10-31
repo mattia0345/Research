@@ -123,13 +123,16 @@ class all_parameter_generation:
         # if self.distribution != "gamma":
         #     raise NotImplementedError("Only 'gamma' distribution implemented for a_parameter_generation")
         shape, scale = self.params
-        if self.distribution == "gamma":
-            k_positive_rates = self.rng.gamma(shape, scale, self.num_states - 1)
-            k_negative_rates = self.rng.gamma(shape, scale, self.num_states - 1)
-        if self.distribution == "levy":
-            k_positive_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
-            k_negative_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
+        # if self.distribution == "gamma":
+        #     k_positive_rates = self.rng.gamma(shape, scale, self.num_states - 1)
+        #     k_negative_rates = self.rng.gamma(shape, scale, self.num_states - 1)
+        # if self.distribution == "levy":
+        #     k_positive_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
+        #     k_negative_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
         
+        k_positive_rates = np.ones(self.num_states - 1)
+        k_negative_rates = np.ones(self.num_states - 1)
+
         return k_positive_rates, k_negative_rates
 
     def p_parameter_generation(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -137,12 +140,15 @@ class all_parameter_generation:
         # if self.distribution != "gamma":
         #     raise NotImplementedError("Only 'gamma' distribution implemented for b_parameter_generation")
         shape, scale = self.params
-        if self.distribution == "gamma":
-            p_positive_rates = self.rng.gamma(shape, scale, self.num_states - 1)
-            p_negative_rates = self.rng.gamma(shape, scale, self.num_states - 1)
-        if self.distribution == "levy":
-            p_positive_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
-            p_negative_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
+        # if self.distribution == "gamma":
+        #     p_positive_rates = self.rng.gamma(shape, scale, self.num_states - 1)
+        #     p_negative_rates = self.rng.gamma(shape, scale, self.num_states - 1)
+        # if self.distribution == "levy":
+        #     p_positive_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
+        #     p_negative_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
+
+        p_positive_rates = np.ones(self.num_states - 1)
+        p_negative_rates = np.ones(self.num_states - 1)
 
         return p_positive_rates, p_negative_rates
     
@@ -272,23 +278,43 @@ def fp_checker(sites_n, a_tot_value, x_tot_value, y_tot_value,
 
     subs_numeric = {a_tot_sym: float(a_tot_value), x_tot_sym: float(x_tot_value), y_tot_sym: float(y_tot_value)}
 
-    # plugging in numeric values
-    polynomials_list_numeric = sp.Matrix([sp.N(p.subs(subs_numeric)) for p in poly_exprs]) # all 4 polynomials are included, will be evaluated at identified roots
-    polynomials_list_reduced_numeric = [sp.simplify(polynomials_list_numeric[i, 0]) for i in range(N - 1)] # range(N - 1) means we only have 3 polynomials now
+    polynomials_list_numeric = sp.Matrix([sp.N(p.subs(subs_numeric)) for p in poly_exprs]) # all N polynomials are included, will be evaluated at identified roots
+    polynomials_list_reduced_numeric = [sp.simplify(polynomials_list_numeric[i, 0]) for i in range(N - 1)] # range(N - 1) means we only have N-1 polynomials now
 
     jacobian = polynomials_list_numeric.jacobian(a_syms_full)
 
     divergence = jacobian.trace()
 
-    divergence_subs_numeric = {a_syms_full[0]: float(0.1), a_syms_full[1]: float(0.1)}
-
-    divergence_evaluated = divergence.evalf(subs=divergence_subs_numeric)
-    print("divergence_evaluated:", divergence_evaluated)
+    # divergence_subs_numeric = {a_syms_full[0]: float(0.1), a_syms_full[1]: float(0.1)}
 
     # jacobian_reduced = [sp.simplify(jacobian[i, 0]) for i in range(N - 1)]
-    jacobian_reduced_lambdified = sp.lambdify(list(a_syms_reduced), jacobian, "numpy")
-    ####
-    # lambdifying functions
+    divergence_lambdified = sp.lambdify(list(a_syms_reduced), divergence, 'numpy')
+
+    #######
+    # grid_num = 50
+
+    # x = np.linspace(0, 1, grid_num)
+    # y = np.linspace(0, 1, grid_num)
+    # X, Y = np.meshgrid(x, y)
+
+    # mask = X + Y <= 1
+    # X_valid = X[mask]
+    # Y_valid = Y[mask]
+
+    # divergence_evaluated = divergence_lambdified(X_valid, Y_valid)
+
+    # # Scatter plot
+    # plt.figure(figsize=(8, 6))
+    # sc = plt.scatter(X_valid, Y_valid, c=divergence_evaluated, cmap='viridis', s=30)
+    # plt.colorbar(sc, label='Divergence')
+    # plt.xlabel(r'$a_0$')
+    # plt.ylabel(r'$a_1$')
+    # plt.title('Divergence over constrained grid (x + y ≤ 1)')
+    # plt.axis('equal')
+    # plt.savefig('divergence_plot.png')
+    # plt.show()
+    #######
+
     polynomials_reduced_lambdified = sp.lambdify(list(a_syms_reduced), polynomials_list_reduced_numeric, "numpy")
     polynomials_lambdified = sp.lambdify(list(a_syms_full), polynomials_list_numeric, "numpy")
     
@@ -309,17 +335,9 @@ def fp_checker(sites_n, a_tot_value, x_tot_value, y_tot_value,
 
     def duplicate(candidate, collection, norm_tol):
         for v in collection:
-            norm_close = False
-            euclidian_distance = np.linalg.norm(np.array(v) - np.array(candidate))
-            if euclidian_distance < norm_tol:
-                norm_close = True
-
-            all_close = np.allclose(v, candidate)
-            if (all_close and norm_close):
-                True
-
-            # if norm_close:
-            #     return True
+            if np.linalg.norm(np.array(v) - np.array(candidate)) < norm_tol:
+                if np.allclose(v, candidate):
+                    return True
         return False
 
     final_sol_list_stable = []
@@ -328,17 +346,25 @@ def fp_checker(sites_n, a_tot_value, x_tot_value, y_tot_value,
     attempt_total_num = 10 # should be proportional to the number of sites/dimensions?
     guesses = []
     for u in range(0, attempt_total_num):
+        # rand_guess = np.random.default_rng().dirichlet(np.ones(N-1))
+        # print(rand_guess)
+        # guesses.append(rand_guess)
         rand_guess = np.random.rand(N-1)
         guesses.append(rand_guess / np.sum(rand_guess))
 
     for guess in guesses:
-        print(guess)
-        root_finder_tol = 1e-8
+        # first check if we already have 2 stable and 1 unstable fixed points 
+        if len(final_sol_list_stable) == 2 and len(final_sol_list_unstable) == 1:
+            print("ALL POINTS FOUND")
+            continue
+        root_finder_tol = 1e-6
         try:
-            sol = root(residuals_vec_red, guess, method = 'hybr', tol = root_finder_tol)
+            sol = root(residuals_vec_red, guess, method = 'lm', tol = root_finder_tol)
             if not sol.success:
+                # print("root finding not a success")
+                print(sol.message)
                 continue
-            
+ 
         except Exception as e:
             continue
         sol = np.asarray(sol.x, dtype=float).ravel()
@@ -347,30 +373,32 @@ def fp_checker(sites_n, a_tot_value, x_tot_value, y_tot_value,
 
         clipping_tolerance = 1e-8
         if np.any((full_sol < -clipping_tolerance) | (full_sol > 1+clipping_tolerance)):
+            print("clipping error")
             continue
 
         full_sol = np.clip(full_sol, 0-clipping_tolerance, 1+clipping_tolerance)
 
-        if (np.any(residuals_vec(full_sol)) < 1e-6):
-            print("Residual tolerance not satisfied")
-            continue
+        # if np.abs(residuals_vec(full_sol) > 1e-6):
+        #     print("Residual tolerance not satisfied")
+        #     continue
 
         J = stability_calculator(full_sol, x_tot_value / y_tot_value, L1, L2, W1, W2)
         # if not np.all(np.isfinite(J)) or np.isnan(J).any():
         if not np.isfinite(J).all():
+            print("infinite detected")
             continue  # skip this guess if J contains NaN or inf
 
         eigenvalues = LA.eigvals(J)
         eigenvalues_real = np.real(eigenvalues)  
 
         # norm_tol = root_finder_tol 
-        norm_tol = 1e-4
-
-        if np.any(eigenvalues_real > 0):
+        norm_tol = 1e-2
+        eigen_value_tol = 1e-8
+        if np.max(eigenvalues_real) > eigen_value_tol:
             if duplicate(full_sol, final_sol_list_unstable, norm_tol) == False:
                 final_sol_list_unstable.append(full_sol)
         
-        elif np.all(eigenvalues_real < 0):
+        if np.all(eigenvalues_real < -eigen_value_tol):
             if duplicate(full_sol, final_sol_list_stable, norm_tol) == False:
                 final_sol_list_stable.append(full_sol) 
 
@@ -409,11 +437,17 @@ def process_sample(i,
     y_tot_value = y_tot_value_parameter_array[i][0]
     alpha_matrix = alpha_matrix_parameter_array[i]
     beta_matrix = beta_matrix_parameter_array[i]
+
+    k_positive_rates = k_positive_rates / np.mean(k_positive_rates)
+    k_negative_rates = k_negative_rates / np.mean(k_negative_rates)
+    p_positive_rates = p_positive_rates / np.mean(p_positive_rates)
+    p_negative_rates = p_negative_rates / np.mean(p_negative_rates)
+    alpha_matrix = alpha_matrix / np.mean(alpha_matrix)
+    beta_matrix = beta_matrix / np.mean(beta_matrix)
+
     stable_fp_array, unstable_fp_array = fp_checker(sites_n, a_tot_value, x_tot_value, y_tot_value,
                                                      alpha_matrix, beta_matrix, k_positive_rates,
                                                      k_negative_rates, p_positive_rates, p_negative_rates)
-    print("alpha_matrix:")
-    print(alpha_matrix)
 
     sim_num = np.array([i]).astype(int)
 
@@ -436,9 +470,7 @@ def process_sample(i,
         "p_negative": p_negative_parameter_array[i]
         }
 
-    # multistability condition
-    # if len(stable_fp_array) == 2 and len(unstable_fp_array) == 2:
-    if len(stable_fp_array) == 2 or len(unstable_fp_array) == 1:
+    if len(stable_fp_array) == 2 and len(unstable_fp_array) == 1:
         multistable_results = {
         "num_of_stable_states": len(stable_fp_array),
         "num_of_unstable_states": len(unstable_fp_array),
@@ -455,8 +487,6 @@ def process_sample(i,
 
     return monostable_results, multistable_results
 
-    # return mon_row, multist_row
-
 def simulation(sites_n, simulation_size):
     a_tot_value = 1
     N = sites_n + 1
@@ -469,6 +499,7 @@ def simulation(sites_n, simulation_size):
     k_negative_parameter_array = np.array([np.clip(gen_rates.k_parameter_generation()[1], rate_min, rate_max) for _ in range(simulation_size)])
     p_positive_parameter_array = np.array([np.clip(gen_rates.p_parameter_generation()[0], rate_min, rate_max) for _ in range(simulation_size)])
     p_negative_parameter_array = np.array([np.clip(gen_rates.p_parameter_generation()[1], rate_min, rate_max) for _ in range(simulation_size)])
+
     gen_concentrations = all_parameter_generation(sites_n, "distributive", "gamma", (0.40637, 0.035587), verbose = False)
     concentration_min, concentration_max = 1e-4, 1e-1
     x_tot_value_parameter_array = np.array([np.clip(gen_concentrations.total_concentration_generation()[0], concentration_min, concentration_max) for _ in range(simulation_size)])
@@ -507,7 +538,7 @@ def simulation(sites_n, simulation_size):
 
 def main():
     sites_n = 2
-    simulation(sites_n, 10)
+    simulation(sites_n, 4000)
 
 if __name__ == "__main__":
     main()

@@ -84,40 +84,31 @@ class all_parameter_generation:
                                             Dict[int, List[int]], Dict[int, List[int]],
                                             Dict[int, List[int]], Dict[int, List[int]]]:
         
-        # valid_X_reactions, valid_Y_reactions = self.calculate_valid_transitions()
 
         shape, scale = self.params
+        valid_X_reactions, valid_Y_reactions = self.calculate_valid_transitions()
+        alpha_matrix = np.zeros((self.num_states, self.num_states))
+        for _, _, i, j, _ in valid_X_reactions:
+            alpha_matrix[i][j] = self.rng.gamma(shape, scale)
 
-        # alpha_matrix = np.zeros((self.num_states, self.num_states))
-        alpha_array = np.array([self.rng.gamma(shape, scale) for i in range(self.n)])
-        alpha_matrix = np.diag(alpha_array, 1)
-        
-        # alpha_matrix = np.diag([self.rng.gamma(shape, scale)]*(min(self.num_states, self.num_states - 1)), 1)[:self.num_states, :self.num_states]
-        # for _, _, i, j, _ in valid_X_reactions:
-
-        #     alpha_matrix[i][j] = self.rng.gamma(shape, scale)
-
+        # alpha_array = np.array([self.rng.gamma(shape, scale) for i in range(self.n)])
+        # alpha_matrix = np.diag(alpha_array, 1)
+    
         return alpha_matrix
-
 
     def beta_parameter_generation(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray,
                                             Dict[int, List[int]], Dict[int, List[int]],
                                             Dict[int, List[int]], Dict[int, List[int]]]:
         
-        # valid_X_reactions, valid_Y_reactions = self.calculate_valid_transitions()
-
         shape, scale = self.params
-        beta_array = np.array([self.rng.gamma(shape, scale) for i in range(self.n)])
-        
-        beta_matrix = np.diag(beta_array, -1)
-        # beta_matrix = np.zeros((self.num_states, self.num_states))
-        
-        # for _, _, i, j, _ in valid_Y_reactions:
+        valid_X_reactions, valid_Y_reactions = self.calculate_valid_transitions()
+        beta_matrix = np.zeros((self.num_states, self.num_states))
+        for _, _, i, j, _ in valid_Y_reactions:
+            beta_matrix[i][j] = self.rng.gamma(shape, scale)
 
-        #     beta_matrix[i][j] = self.rng.gamma(shape, scale)
+        # beta_array = np.array([self.rng.gamma(shape, scale) for i in range(self.n)])
+        # beta_matrix = np.diag(beta_array, -1)
 
-        # beta_matrix = np.diag([self.rng.gamma(shape, scale)]*(min(self.num_states-1, self.num_states)), -1)[:self.num_states, :self.num_states]
-        
         return beta_matrix
     
     def k_parameter_generation(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -130,9 +121,6 @@ class all_parameter_generation:
         if self.distribution == "levy":
             k_positive_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
             k_negative_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
-        
-        # k_positive_rates = np.ones(self.num_states - 1)
-        # k_negative_rates = np.ones(self.num_states - 1)
 
         return k_positive_rates, k_negative_rates
 
@@ -147,9 +135,6 @@ class all_parameter_generation:
         if self.distribution == "levy":
             p_positive_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
             p_negative_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
-
-        # p_positive_rates = np.ones(self.num_states - 1)
-        # p_negative_rates = np.ones(self.num_states - 1)
 
         return p_positive_rates, p_negative_rates
     

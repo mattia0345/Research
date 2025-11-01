@@ -65,6 +65,7 @@ def MATTIA_REDUCED(t, state_array, n, x_tot, y_tot, L1, L2, W1, W2):
 
 def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates):
 
+    # N = n**2
     N = n + 1
     ones_vec = np.ones(N - 1)
 

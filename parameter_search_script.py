@@ -26,6 +26,7 @@ class all_parameter_generation:
     """
     def __init__(self, n: int, reaction_types: str, distribution: str, distribution_paramaters: List[float], verbose: bool = False):
         self.n = n
+        # self.num_states = n**2
         self.num_states = n + 1
         self.distribution = distribution
         self.params = distribution_paramaters
@@ -123,15 +124,15 @@ class all_parameter_generation:
         # if self.distribution != "gamma":
         #     raise NotImplementedError("Only 'gamma' distribution implemented for a_parameter_generation")
         shape, scale = self.params
-        # if self.distribution == "gamma":
-        #     k_positive_rates = self.rng.gamma(shape, scale, self.num_states - 1)
-        #     k_negative_rates = self.rng.gamma(shape, scale, self.num_states - 1)
-        # if self.distribution == "levy":
-        #     k_positive_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
-        #     k_negative_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
+        if self.distribution == "gamma":
+            k_positive_rates = self.rng.gamma(shape, scale, self.num_states - 1)
+            k_negative_rates = self.rng.gamma(shape, scale, self.num_states - 1)
+        if self.distribution == "levy":
+            k_positive_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
+            k_negative_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
         
-        k_positive_rates = np.ones(self.num_states - 1)
-        k_negative_rates = np.ones(self.num_states - 1)
+        # k_positive_rates = np.ones(self.num_states - 1)
+        # k_negative_rates = np.ones(self.num_states - 1)
 
         return k_positive_rates, k_negative_rates
 
@@ -140,15 +141,15 @@ class all_parameter_generation:
         # if self.distribution != "gamma":
         #     raise NotImplementedError("Only 'gamma' distribution implemented for b_parameter_generation")
         shape, scale = self.params
-        # if self.distribution == "gamma":
-        #     p_positive_rates = self.rng.gamma(shape, scale, self.num_states - 1)
-        #     p_negative_rates = self.rng.gamma(shape, scale, self.num_states - 1)
-        # if self.distribution == "levy":
-        #     p_positive_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
-        #     p_negative_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
+        if self.distribution == "gamma":
+            p_positive_rates = self.rng.gamma(shape, scale, self.num_states - 1)
+            p_negative_rates = self.rng.gamma(shape, scale, self.num_states - 1)
+        if self.distribution == "levy":
+            p_positive_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
+            p_negative_rates = levy.rvs(loc=shape, scale=scale, size=self.num_states - 1, random_state=self.rng)
 
-        p_positive_rates = np.ones(self.num_states - 1)
-        p_negative_rates = np.ones(self.num_states - 1)
+        # p_positive_rates = np.ones(self.num_states - 1)
+        # p_negative_rates = np.ones(self.num_states - 1)
 
         return p_positive_rates, p_negative_rates
     

@@ -5,6 +5,8 @@ from scipy.stats import levy
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 from parameter_search_script import all_parameter_generation
+from joblib import Parallel, delayed
+import pickle
 
 def MATTIA_FULL(t, state_array, n, Kp, Pp, G, H, Q, M_mat, D, N_mat):
 
@@ -68,7 +70,9 @@ def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rat
 
     Kp = np.diag(np.append(k_positive_rates, 0))
     Km = np.append(np.diag(k_negative_rates), np.zeros((1, len(k_negative_rates))), axis=0)
-
+    # print(Kp)
+    # print(Km)
+    
     Pp = np.diag(np.insert(p_positive_rates, 0, 0))
     Pm = np.vstack([np.zeros((1, len(p_negative_rates))), np.diag(p_negative_rates)])    # print("a", a)
 
@@ -95,6 +99,23 @@ def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rat
     W1 = M_inv @ Q; W2 = N_inv @ D
 
     return Kp, Pp, G, H, Q, M_mat, D, N_mat, L1, L2, W1, W2
+stability_tol = 1e-8
+
+def stable_event(t, state_array, n, x_tot, y_tot, L1, L2, W1, W2):
+
+    a_dot = MATTIA_REDUCED(t, state_array, n, x_tot, y_tot, L1, L2, W1, W2)
+
+    epsilon = 1e-300
+    a_safe = np.maximum(a_dot, epsilon)
+
+    dln_dt = a_dot / a_safe
+
+    max_abs = np.max(np.abs(dln_dt))
+
+    return max_abs - stability_tol
+
+stable_event.terminal = True
+stable_event.direction = -1
 
 def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_t, full_model, plot):
 
@@ -116,7 +137,8 @@ def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_
     def color_for_species(idx):
         return cmap(idx % cmap.N)
     
-    abstol = 1e-20
+    abstol = 1e-12
+    # abstol = 1e-20
     reltol = 1e-5
 
     if full_model == False:
@@ -124,10 +146,19 @@ def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_
         assert len(initial_states_array) == N
 
         mattia_reduced_parameter_tuple = (n, x_tot, y_tot, L1, L2, W1, W2)
-        # t_array = np.linspace(t_span[0], t_span[1], 500)
-        sol = solve_ivp(MATTIA_REDUCED, t_span = t_span, y0=np.asarray(initial_states_array, dtype=float), 
-                        args = mattia_reduced_parameter_tuple, method = 'LSODA', atol = abstol, rtol = reltol)
-        # jac = jacobian_reduced
+
+        try:
+            sol = solve_ivp(MATTIA_REDUCED, t_span=t_span, y0=np.asarray(initial_states_array, dtype=float),
+                    args=mattia_reduced_parameter_tuple, method='LSODA', events=stable_event,
+                    atol=abstol, rtol=reltol)
+        except ValueError as e:
+            # brentq or event bracketing error — fallback to no-events run
+            print("Event bracketing failed, falling back to no-events solve_ivp:", e)
+            sol = solve_ivp(MATTIA_REDUCED, t_span=t_span, y0=np.asarray(initial_states_array, dtype=float),
+                            args=mattia_reduced_parameter_tuple, method='LSODA',
+                            atol=abstol, rtol=reltol)
+
+        
         a_solution_stack = np.stack([sol.y[i] for i in range(0, N)]) / a_tot
 
         if plot == True:
@@ -189,28 +220,28 @@ def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_
     
     return sol.y.T[-1]
 
-def remove_close_subarrays(arrays, threshold,):
-    # Convert to numpy array for easier computation
+def remove_close_subarrays(arrays, abs_tol=1e-6, rel_tol=1e-8):
     arrays_np = np.array(arrays)
-    
-    # Keep track of which arrays to keep
-    keep_indices = []
-    
+    keep = []
+    norms = np.linalg.norm(arrays_np, axis=1)
     for i in range(len(arrays_np)):
-        is_far_enough = True
-        
-        # Check distance to all previously kept arrays
-        for j in keep_indices:
-            if np.linalg.norm(arrays_np[i] - arrays_np[j]) < threshold:
-                is_far_enough = False
+        is_far = True
+        for j in keep:
+            diff = np.linalg.norm(arrays_np[i] - arrays_np[j])
+            thresh = abs_tol + rel_tol * max(norms[i], norms[j], 1.0)
+            if diff < thresh:
+                is_far = False
                 break
-        if is_far_enough:
-            keep_indices.append(i)
-    
-    return np.array([arrays[i] for i in keep_indices])
+        if is_far:
+            keep.append(i)
 
-def main():
-    sites_n = 2; N = sites_n + 1
+    return arrays_np[keep]
+
+def fp_finder(sites_n, a_tot_value, x_tot_value, y_tot_value,
+                      alpha_matrix, beta_matrix,
+                      k_positive_rates, k_negative_rates,
+                      p_positive_rates, p_negative_rates):
+    N = sites_n + 1
     a_tot_value = 1
 
     rates_best_shape_parameters_non_sequential = (0.123, 4.46e6)
@@ -234,29 +265,133 @@ def main():
     Kp, Pp, G, H, Q, M_mat, D, N_mat, L1, L2, W1, W2 = MATRIX_FINDER(sites_n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates)
 
     final_t = 1000000
-    grid_num = 5
+    grid_num = 8
     stable_points = []
-    for u in range(0, grid_num):
-        rand_guess = np.random.rand(N)
-        rand_guess = rand_guess / np.sum(rand_guess)
+    plot = False
+    guesses = []
+    for i in range(grid_num):
+        guesses.append(np.random.default_rng().dirichlet(np.ones(N)))
+
+    for guess in guesses:
+        # rand_guess = np.random.rand(N)
+        # rand_guess = rand_guess / np.sum(rand_guess)
         # rand_guess[-1] = 1 - np.sum(rand_guess[0:])
     # for guess in guesses:
-        initial_states_array = rand_guess
+        initial_states_array = guess
         parameters_tuple = (sites_n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates, a_tot_value, x_tot_value, y_tot_value)            
-        stable_points.append(phosphorylation_system_solver(parameters_tuple, initial_states_array, final_t, False, True))
+        stable_points.append(phosphorylation_system_solver(parameters_tuple, initial_states_array, final_t, False, plot))
     stable_point_array = np.array(stable_points)
-    print(f"All points found:")
-    print(stable_point_array)
-
-    close_tol = 1e-6
-    unique_stable_point_array = np.array(remove_close_subarrays(stable_points, close_tol))
-    print(f"All unique points are:")
-    print(unique_stable_point_array)
+    # print(f"All points found:")
+    # print(stable_point_array)
+    residual = MATTIA_REDUCED(1, stable_point_array[0], sites_n, x_tot_value, y_tot_value, L1, L2, W1, W2)
+    close_tol = 1e-10
+    unique_stable_point_array = np.array(remove_close_subarrays(stable_point_array, close_tol))
     for fp in unique_stable_point_array:
         residual = MATTIA_REDUCED(1, fp, sites_n, x_tot_value, y_tot_value, L1, L2, W1, W2)
-        if np.max(residual) > 1e-6:
+        if np.max(residual) > 1e-10:
             print("Point was not found to be a valid zero.")
+            return np.array([])
+        
+    print(f"# of stable points found is {len(unique_stable_point_array)}")
 
+    return unique_stable_point_array
 
+def process_sample_script(i,
+                   sites_n,
+                   a_tot_value,
+                   x_tot_value_parameter_array,
+                   y_tot_value_parameter_array,
+                   alpha_matrix_parameter_array,
+                   beta_matrix_parameter_array,
+                   k_positive_parameter_array,
+                   k_negative_parameter_array,
+                   p_positive_parameter_array,
+                   p_negative_parameter_array):
+    
+    k_positive_rates = k_positive_parameter_array[i]
+    k_negative_rates = k_negative_parameter_array[i]
+    p_positive_rates = p_positive_parameter_array[i]
+    p_negative_rates = p_negative_parameter_array[i]
+    x_tot_value = x_tot_value_parameter_array[i][0]
+    y_tot_value = y_tot_value_parameter_array[i][0]
+    alpha_matrix = alpha_matrix_parameter_array[i] / np.mean(alpha_matrix_parameter_array[i])
+    beta_matrix = beta_matrix_parameter_array[i] / np.mean(beta_matrix_parameter_array[i])
+
+    multistable_results = None
+    
+    unique_stable_fp_array = fp_finder(sites_n, a_tot_value, x_tot_value, y_tot_value,
+                                                     alpha_matrix, beta_matrix, k_positive_rates,
+                                                     k_negative_rates, p_positive_rates, p_negative_rates)
+    
+    possible_steady_states = np.floor((sites_n + 2) / 2).astype(int)
+
+    if len(unique_stable_fp_array) == possible_steady_states:
+        multistable_results = {
+        "num_of_stable_states": len(unique_stable_fp_array),
+        "stable_states": unique_stable_fp_array,
+        "total_concentration_values": np.array([a_tot_value, x_tot_value, y_tot_value]),
+        "alpha_matrix": alpha_matrix,
+        "beta_matrix": beta_matrix,
+        "k_positive": k_positive_rates,
+        "k_negative": k_negative_rates,
+        "p_positive": p_positive_rates,
+        "p_negative": p_negative_rates
+        }
+
+    return multistable_results
+
+def simulation_ode(sites_n, simulation_size):
+    a_tot_value = 1
+    N = sites_n + 1
+
+    gen_rates = all_parameter_generation(sites_n, "distributive", "gamma", (0.123, 4.46e6), verbose = False)
+    rate_min, rate_max = 1e-1, 1e7
+    alpha_matrix_parameter_array = np.array([gen_rates.alpha_parameter_generation() for _ in range(simulation_size)]) # CANNOT CLIP
+    beta_matrix_parameter_array = np.array([gen_rates.beta_parameter_generation() for _ in range(simulation_size)]) # CANNOT CLIP
+    # k_positive_parameter_array = np.array([np.ones(N - 1) for _ in range(simulation_size)])
+    # k_negative_parameter_array = np.array([np.ones(N - 1) for _ in range(simulation_size)])
+    # p_positive_parameter_array = np.array([np.ones(N - 1) for _ in range(simulation_size)])
+    # p_negative_parameter_array = np.array([np.ones(N - 1) for _ in range(simulation_size)])
+    k_positive_parameter_array = np.array([gen_rates.k_parameter_generation()[0] for _ in range(simulation_size)])
+    k_negative_parameter_array = np.array([gen_rates.k_parameter_generation()[1] for _ in range(simulation_size)])
+    p_positive_parameter_array = np.array([gen_rates.p_parameter_generation()[0] for _ in range(simulation_size)])
+    p_negative_parameter_array = np.array([gen_rates.p_parameter_generation()[1] for _ in range(simulation_size)])
+    gen_concentrations = all_parameter_generation(sites_n, "distributive", "gamma", (0.40637, 0.035587), verbose = False)
+    concentration_min, concentration_max = 1e-4, 1e-1
+    x_tot_value_parameter_array = np.array([np.clip(gen_concentrations.total_concentration_generation()[0], concentration_min, concentration_max) for _ in range(simulation_size)])
+    y_tot_value_parameter_array = np.array([np.clip(gen_concentrations.total_concentration_generation()[1], concentration_min, concentration_max) for _ in range(simulation_size)])
+
+    results = Parallel(n_jobs=-2, backend="loky")(
+        delayed(process_sample_script)(
+            i,
+            sites_n,
+            a_tot_value,
+            x_tot_value_parameter_array,
+            y_tot_value_parameter_array,
+            alpha_matrix_parameter_array,
+            beta_matrix_parameter_array,
+            k_positive_parameter_array,
+            k_negative_parameter_array,
+            p_positive_parameter_array,
+            p_negative_parameter_array
+        ) for i in range(simulation_size)
+    )
+    
+    multistable_results_list = []
+
+    for multi_res in results:
+        if multi_res is not None:
+            multistable_results_list.append(multi_res)
+    multifile = f"multistability_parameters_{simulation_size}_{sites_n}.pkl"
+
+    with open(multifile, "wb") as f:
+        pickle.dump(multistable_results_list, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    return
+
+def main():
+    n = 2
+    simulation_ode(n, 5000)
+    
 if __name__ == "__main__":
     main()

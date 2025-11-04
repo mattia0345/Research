@@ -204,29 +204,6 @@ def polynomial_finder(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative
 
     return L1, L2, W1, W2
 
-def stability_calculator(a_fixed_points, p, L1, L2, W1, W2):
-
-    a_fixed_points = np.asarray(a_fixed_points, dtype=float).ravel()
-    N = a_fixed_points.size
-
-    ones_vec_j = np.ones((1, N-1), dtype = float) # shape (1, N-1)
-
-    a_fixed_points = a_fixed_points.reshape((N, 1))  # shape (N, 1)
-    L1 = np.array(L1, dtype=float)
-    L2 = np.array(L2, dtype=float)
-    W1 = np.array(W1, dtype=float)
-    W2 = np.array(W2, dtype=float)
-
-    # Compute denominators
-    denom1 = float(1 + np.dot(ones_vec_j, (W1 @ a_fixed_points)).item())
-    denom2 = float(1 + np.dot(ones_vec_j, (W2 @ a_fixed_points)).item())
-
-    term1 = (L1 / denom1) - (((L1 @ a_fixed_points) @ (ones_vec_j @ W1)) / (denom1**2))
-    term2 = (L2 / denom2) - (((L2 @ a_fixed_points) @ (ones_vec_j @ W2)) / (denom2**2))
-
-    J = (p * term1) + term2
-    return J
-
 def fp_checker(sites_n, a_tot_value, x_tot_value, y_tot_value,
                       alpha_matrix, beta_matrix,
                       k_positive_rates, k_negative_rates,

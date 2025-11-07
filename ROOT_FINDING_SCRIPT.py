@@ -64,16 +64,14 @@ def root_finder(n, a_tot, x_tot, y_tot,
     guesses = []
     red_eigenvalues_real_list = []
 
-    attempt_total_num = 8
+    attempt_total_num = int(1.75*N)
     guesses = []
 
-    # guesses.append(np.ones(3*N-3)) 
-    # guesses.append(np.zeros(3*N-3))    
-
-    # for i in range(attempt_total_num):
-    #     guesses.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))    # attempt_total_num = 3
-
-    #     guesses.append(np.concatenate([np.array([alpha]), np.zeros(3*N-4)]))    # attempt_total_num = 3
+    for i in range(attempt_total_num):
+        # guesses.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
+        guesses.append(np.concatenate([np.zeros(1), np.array([random.random()]), np.zeros(3*N-5)]))
+        guesses.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
+        guesses.append(guess_generator(n, a_tot, x_tot, y_tot))
 
     for i in range(attempt_total_num):
         guesses.append(guess_generator(n, a_tot, x_tot, y_tot))

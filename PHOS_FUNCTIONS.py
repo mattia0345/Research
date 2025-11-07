@@ -3,6 +3,7 @@ from typing import List, Tuple, Dict, Any, Set
 import random as rnd
 from scipy.stats import levy
 import random as random
+from scipy.linalg import lu_factor, lu_solve
 
 def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates):
 
@@ -57,6 +58,12 @@ def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rat
 
     assert G.shape == (N, N-1), f"G shape must be ({N}, {N-1})"
     assert H.shape == (N, N-1), f"H shape must be ({N}, {N-1})"
+    # lu, piv = lu_factor(M_mat)
+    # M_inv = lu_solve((lu, piv), np.eye(M_mat.shape[0]))
+    # lu, piv = lu_factor(N_mat)
+    # N_inv = lu_solve((lu, piv), np.eye(N_mat.shape[0]))
+    # M_inv = np.linalg.pinv(M_mat)
+    # N_inv = np.linalg.pinv(N_mat)
     M_inv = np.linalg.inv(M_mat); N_inv = np.linalg.inv(N_mat)
 
     L1 = G @ M_inv @ Q - Kp; L2 = H @ N_inv @ D - Pp

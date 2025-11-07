@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 import pickle
 import random
-from PHOS_FUNCTIONS import MATRIX_FINDER, MATTIA_FULL
+from PHOS_FUNCTIONS import MATRIX_FINDER, MATTIA_FULL, guess_generator
 
 def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_t):
 
@@ -100,17 +100,26 @@ def plotter(index, final_t, file_name):
     p_positive_rates = multistable_results[index]["p_positive_rates"]
     p_negative_rates = multistable_results[index]["p_negative_rates"]
 
-    for i in range(16):
-        initial_states_array = np.concatenate([np.array([random.random()]), np.zeros(3*N-4)])
+    attempt_total_num = int(1.75*N)
+
+    initial_conditions_list = []
+
+    for i in range(attempt_total_num):
+        initial_conditions_list.append(np.concatenate([np.zeros(1), np.array([random.random()]), np.zeros(3*N-5)]))
+        initial_conditions_list.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
+        initial_conditions_list.append(guess_generator(n, a_tot_parameter, x_tot_parameter, y_tot_parameter))
+
+    for guess in initial_conditions_list:
+        # initial_states_array = np.concatenate([np.array([random.random()]), np.zeros(3*N-4)])
         parameters_tuple = (n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates, a_tot_parameter, x_tot_parameter, y_tot_parameter)
-        phosphorylation_system_solver(parameters_tuple, initial_states_array, final_t)
+        phosphorylation_system_solver(parameters_tuple, np.array(guess), final_t)
 
 def main():
-    file_name = "multistability_parameters_500_2.pkl"
+    file_name = "multistability_parameters_500_4.pkl"
 
-    index = 36
+    index = 0
 
-    final_t = 100000
+    final_t = 10000000
     plotter(index, final_t, file_name)
 
 if __name__ == "__main__":

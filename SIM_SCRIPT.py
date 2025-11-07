@@ -11,7 +11,7 @@ from scipy.optimize import approx_fprime
 from scipy.differentiate import jacobian
 from scipy.stats import reciprocal
 from numpy import linalg as LA
-from PHOS_FUNCTIONS import MATRIX_FINDER, MATTIA_FULL, guess_generator
+from PHOS_FUNCTIONS import MATRIX_FINDER, MATTIA_FULL, guess_generator, matrix_clip
 from PHOS_FUNCTIONS import duplicate, all_parameter_generation
 
 def stable_event(t, state_array, *args):
@@ -42,8 +42,8 @@ def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_
     # default
     # abstol = 1e-20
     # reltol = 1e-5
-    abstol = 1e-8
-    reltol = 1e-4
+    abstol = 1e-6
+    reltol = 1e-3
 
     assert len(initial_states_array) == 3*N - 3
 
@@ -52,6 +52,7 @@ def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_
     method = 'LSODA'
     sol = solve_ivp(MATTIA_FULL, t_span = t_span, y0=np.asarray(initial_states_array, dtype=float),
                 args = mattia_full_parameter_tuple, method = method, atol = abstol, rtol = reltol)
+    
     return sol.y.T[-1]
 
 def fp_finder(n, a_tot, x_tot, y_tot,
@@ -62,8 +63,8 @@ def fp_finder(n, a_tot, x_tot, y_tot,
 
     Kp, Pp, G, H, Q, M_mat, D, N_mat, L1, L2, W1, W2 = MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates)
 
-    norm_tol = 0.1
-    final_t = 1000000
+    norm_tol = 0.001
+    final_t = 10000000
     stable_points = []
     plot = False
 
@@ -75,6 +76,7 @@ def fp_finder(n, a_tot, x_tot, y_tot,
 
     for i in range(attempt_total_num):
         # guesses.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
+        guesses.append(np.concatenate([np.zeros(1), np.array([random.random()]), np.zeros(3*N-5)]))
         guesses.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
         guesses.append(guess_generator(n, a_tot, x_tot, y_tot))
 
@@ -100,21 +102,11 @@ def fp_finder(n, a_tot, x_tot, y_tot,
         eigenvalues_real = np.real(eigenvalues)
         # print(f"Eigenvalues at fixed point: {eigenvalues_real}")
 
-        if duplicate(reduced_sol, stable_points, norm_tol) == False:
+        if duplicate(reduced_sol, stable_points, norm_tol):
             # print("Duplicate found, skipping")
-            stable_points.append(reduced_sol)
             continue
 
-    # def remove_near_duplicates(data, tol=1e-10):
-    #     """Remove near-duplicate elements from a list of lists or arrays."""
-    #     unique = []
-    #     for a in data:
-    #         a = np.asarray(a, dtype=float)  # ensures consistent numeric comparison
-    #         if not any(np.allclose(a, np.asarray(b, dtype=float), atol=tol, rtol=0) for b in unique):
-    #             unique.append(a.tolist())  # store as plain lists for easier printing
-    #     return unique
-    
-    # stable_points = remove_near_duplicates(stable_points)
+        stable_points.append(reduced_sol)
 
     print(f"# of stable points found is {len(stable_points)}")
 
@@ -144,22 +136,22 @@ def process_sample_script(i,
     x_tot_value = x_tot_value_parameter_array[i][0]
     y_tot_value = y_tot_value_parameter_array[i][0]
 
-    rate_min, rate_max = 1e-1, 1e2
+    rate_min, rate_max = 1e-2, 1e2
 
-    # k_positive_rates = k_positive_rates / np.mean(k_positive_rates)
-    # k_positive_rates = np.clip(k_positive_rates, rate_min, rate_max)
-    # k_negative_rates = k_negative_rates / np.mean(k_negative_rates)
-    # k_negative_rates = np.clip(k_negative_rates, rate_min, rate_max)
+    k_positive_rates = k_positive_rates / np.mean(k_positive_rates)
+    k_positive_rates = np.clip(k_positive_rates, rate_min, rate_max)
+    k_negative_rates = k_negative_rates / np.mean(k_negative_rates)
+    k_negative_rates = np.clip(k_negative_rates, rate_min, rate_max)
 
-    # p_positive_rates = p_positive_rates / np.mean(p_positive_rates)
-    # p_positive_rates = np.clip(p_positive_rates, rate_min, rate_max)
-    # p_negative_rates = p_negative_rates / np.mean(p_negative_rates)
-    # p_negative_rates = np.clip(p_negative_rates, rate_min, rate_max)
+    p_positive_rates = p_positive_rates / np.mean(p_positive_rates)
+    p_positive_rates = np.clip(p_positive_rates, rate_min, rate_max)
+    p_negative_rates = p_negative_rates / np.mean(p_negative_rates)
+    p_negative_rates = np.clip(p_negative_rates, rate_min, rate_max)
 
-    # alpha_matrix = alpha_matrix / np.mean(alpha_matrix)
-    # alpha_matrix = matrix_clip(alpha_matrix, rate_min, rate_max)
-    # beta_matrix = beta_matrix / np.mean(beta_matrix)
-    # beta_matrix = matrix_clip(beta_matrix, rate_min, rate_max)
+    alpha_matrix = alpha_matrix / np.mean(alpha_matrix)
+    alpha_matrix = matrix_clip(alpha_matrix, rate_min, rate_max)
+    beta_matrix = beta_matrix / np.mean(beta_matrix)
+    beta_matrix = matrix_clip(beta_matrix, rate_min, rate_max)
 
     multistable_results = None
 
@@ -196,12 +188,14 @@ def process_sample_script(i,
 
     alpha_matrix = np.diag(reciprocal(a=rate_min, b=rate_max).rvs(size=N-1), k = 1)
     beta_matrix = np.diag(reciprocal(a=rate_min, b=rate_max).rvs(size=N-1), k = -1)
+
     unique_stable_fp_array = fp_finder(n, a_tot_value, x_tot_value, y_tot_value,
                                                      alpha_matrix, beta_matrix, k_positive_rates,
                                                      k_negative_rates, p_positive_rates, p_negative_rates)
     # print(unique_stable_fp_array)
     possible_steady_states = np.floor((n + 2) / 2).astype(int)
     print(i)
+    # if 8 >= len(unique_stable_fp_array) == possible_steady_states:
     if len(unique_stable_fp_array) == possible_steady_states:
         multistable_results = {
         "num_of_stable_states": len(unique_stable_fp_array),
@@ -213,12 +207,6 @@ def process_sample_script(i,
         "k_negative_rates": k_negative_rates,
         "p_positive_rates": p_positive_rates,
         "p_negative_rates": p_negative_rates,
-        # "alpha_matrix": alpha_matrix_parameter_array[i],
-        # "beta_matrix": beta_matrix_parameter_array[i],
-        # "k_positive_rates": k_positive_parameter_array[i],
-        # "k_negative_rates": k_negative_parameter_array[i],
-        # "p_positive_rates": p_positive_parameter_array[i],
-        # "p_negative_rates": p_negative_parameter_array[i],
         }
 
     return multistable_results
@@ -226,9 +214,11 @@ def process_sample_script(i,
 def simulation(n, simulation_size):
     a_tot_value = 1
     N = n + 1
-    x_tot = 1e-3
-    y_tot = 1e-3
-    gen_rates = all_parameter_generation(n, "distributive", "gamma", (0.123, 4.46e6), verbose = False)
+    x_tot = 1e-2
+    y_tot = 1e-2
+    old_shape_parameters = (0.123, 4.46e6)
+    new_shape_parameters = (1e6, 1e6)
+    gen_rates = all_parameter_generation(n, "distributive", "gamma", new_shape_parameters, verbose = False)
     rate_min, rate_max = 1e-1, 1e7
     alpha_matrix_parameter_array = np.array([gen_rates.alpha_parameter_generation() for _ in range(simulation_size)]) # CANNOT CLIP
     beta_matrix_parameter_array = np.array([gen_rates.beta_parameter_generation() for _ in range(simulation_size)]) # CANNOT CLIP
@@ -270,7 +260,7 @@ def simulation(n, simulation_size):
     return
 
 def main():
-    n = 2
+    n = 4
     simulation(n, 500)
     
 if __name__ == "__main__":

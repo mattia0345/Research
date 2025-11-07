@@ -78,47 +78,6 @@ def batch_get_coordinates(locations: List[Tuple[str, str, str]],
         time.sleep(pause)  # be nice to the server
     return coords
 
-def bfs(G, source):
-    """ return a dictionary that maps node-->distance for all nodes reachable
-        from the source node, in the unweighted undirected graph G """
-    # set of nodes left to visit
-    nodes = deque()
-    nodes.append(source)
-    
-    # dictionary that gives True or False for each node
-    visited = {node:False for node in G}
-    visited[source] = True
-    
-    # Initial distances to source are: 0 for source itself, infinity otherwise
-    dist = {node: np.inf for node in G}
-    dist[source] = 0
-    
-    # while (container) is shorthand for "while this container is not empty"
-    while nodes:
-        # take the earliest-added element to the deque (why do we do this instead of popright?)
-        node = nodes.popleft()
-        
-        # visit all neighbors unless they've been visited, record their distances
-        for nbr in G.neighbors(node):
-            if not visited[nbr]:
-                dist[nbr] = dist[node] + 1
-                visited[nbr] = True
-                nodes.append(nbr)
-    return dist
-
-def components(G):
-    """ return a list of tuples, where each tuple is the nodes in a component of G """
-    components = []
-    
-    nodes_left = set(G.nodes())
-    while nodes_left:
-        src = nodes_left.pop()
-        dist = bfs(G, src)
-        component = [node for node in dist.keys() if dist[node] < np.inf]
-        components.append(component)
-        nodes_left = nodes_left - set(component)
-    return components
-
 def time_obtain_list(list, clock_time_given):
     """given a list where the ith elemnt is a "MM/DD/YYYY" or "MM/DD/YYYY HOUR:MINUTE" string, 
     return a list where the ith element is that same string converted to total minutes"""
@@ -343,11 +302,11 @@ def network_plotter(ufo_network):
     plt.ylabel('latitude')
     plt.show()
 
-def network_characteristics(ufo_network):
-    C = components(ufo_network)
+def network_characteristics(ufo_network, k_avg_list):
+    C = nx.connected_components(ufo_network)
     print("The number of connected components is:", len(C))
 
-    C = sorted(C, key=lambda c: len(c), reverse=True)
+    # C = sorted(C, key=lambda c: len(c), reverse=True)
     component_sizes = [len(c) for c in C]
 
     W = nx.adjacency_matrix(ufo_network).toarray()
@@ -355,7 +314,34 @@ def network_characteristics(ufo_network):
 
     s_array = np.sum(A * W, axis=1)
     clustering_coefficient_list = [i for i in nx.clustering(ufo_network).values()]
-    mean_clustering_coefficient = np.mean(clustering_coefficient_list)
+
+    # weighted clustering coefficient calculate
+    n = len(A)
+    weighted_clustering_coefficient = np.zeros(n)
+
+    for i in range(n):
+        if k_avg_list[i] <= 1 or s_array[i] == 0:
+            weighted_clustering_coefficient[i] = 0
+            continue
+        
+        # Find neighbors of node i (where a[i,j] = 1)
+        neighbors = np.where(A[i] != 0)[0]
+        
+        # Sum over all pairs of neighbors (j, h)
+        total = 0
+        for j in neighbors:
+            for h in neighbors:
+                if j != h:
+                    total += ((W[i,j] + W[i,h]) / 2) * A[j,h]
+        
+        weighted_clustering_coefficient[i] = total / (s_array[i] * (k_avg_list[i] - 1))
+
+    # weighted average nearest neighbor degree calculation
+
+
+    
+    print(f"The node with the highest weighted clustering coefficient is node {np.where(clustering_coefficient_list == np.max(clustering_coefficient_list))}, with a clustering coefficient of {max(clustering_coefficient_list)}")
+    print(f"The average weighted clustering coefficient is: {np.mean(weighted_clustering_coefficient)}")
     print(f"The node with the highest clustering coefficient is node {clustering_coefficient_list.index(max(clustering_coefficient_list))}, with a clustering coefficient of {max(clustering_coefficient_list)}")
     print(f"The average clustering coefficient is: {np.mean(clustering_coefficient_list)}")
 
@@ -397,6 +383,7 @@ def main():
     # plt.plot(times_list, avg_clustering_list)
     # plt.show()
     network_plotter(ufo_network)
+    network_characteristics(ufo_network, k_avg_list)
     # weight_distribution(ufo_network)
 if __name__ == "__main__":
     main()

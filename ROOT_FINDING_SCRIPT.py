@@ -5,198 +5,223 @@ import matplotlib.pyplot as plt
 from scipy.optimize import root
 from joblib import Parallel, delayed
 import pickle
+import random as random
 from numpy import linalg as LA
 import numpy as np
+from scipy.stats import reciprocal
 from scipy.optimize import root
-# from PHOS_FUNCTIONS import MATTIA_FULL
-from PHOS_FUNCTIONS import MATTIA_REDUCED, MATTIA_REDUCED_JACOBIAN, MATRIX_FINDER 
+from scipy.optimize import approx_fprime
+from PHOS_FUNCTIONS import MATTIA_FULL
+from PHOS_FUNCTIONS import MATTIA_REDUCED, MATTIA_REDUCED_JACOBIAN, MATRIX_FINDER, guess_generator
 from PHOS_FUNCTIONS import ALL_GUESSES, duplicate, stability_calculator, matrix_clip, all_parameter_generation
 
-def MATTIA_REDUCED_ROOT(state_array, n, x_tot, y_tot, L1, L2, W1, W2):
+def MATTIA_FULL_ROOT_JACOBIAN(state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
+    """Compute the Jacobian of MATTIA_FULL_ROOT numerically"""
+    def mattia_full_wrapper(state):
+        return MATTIA_FULL_ROOT(state, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
+    
+    jacobian_mattia_full = np.array([
+        approx_fprime(state_array, lambda s: mattia_full_wrapper(s)[i], epsilon=1e-8)
+        for i in range(len(state_array))])
+    
+    return jacobian_mattia_full
+
+def MATTIA_FULL_ROOT(state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
+
+    # including conservation laws
+    # state_array = [a0, a1, b0, b1, c1, c2]
+
     N = n + 1
-    # N = state_array.size
+    assert len(state_array) == 3*N - 3
+    a_red = state_array[0: N - 1]
+    b = state_array[N - 1: 2*N - 2]
+    c = state_array[2*N - 2: 3*N - 3]
 
-    ones_vec = np.ones(W1.shape[0])
+    a = np.concatenate([a_red, [a_tot - np.sum(a_red) - np.sum(b) - np.sum(c)]])
+    x = x_tot - np.sum(b)
+    y = y_tot - np.sum(c)
 
-    a_red = np.asarray(state_array, dtype=float).ravel()
-    # assert a_red.size == N - 1, f"expected b of length {N-1}, got {a_red.size}"
+    a_dot = (G @ b) + (H @ c) - x * (Kp @ a) - y * (Pp @ a)  
+    b_dot = x * (Q @ a) - (M_mat @ b)
+    c_dot = y * (D @ a) - (N_mat @ c)
 
-    # Create full state vector (1D array, not column vector)
-    a = np.concatenate([a_red, [1 - np.sum(a_red)]])
-    
-    # Compute denominator scalars first
-    denom1 = 1 + ones_vec @ (W1 @ a)
-    denom2 = 1 + ones_vec @ (W2 @ a)
-    
-    # Compute a_dot as 1D array
-    a_dot = ((x_tot * (L1 @ a)) / denom1) + ((y_tot * (L2 @ a)) / denom2)
+    x_dot = -1*np.sum(b_dot)
+    y_dot = -1*np.sum(c_dot)
 
-    return a_dot[:N-1]
+    a_dot_red = a_dot[0: N-1]
 
-def jacobian_reduced_root(state_array, n, x_tot, y_tot, L1, L2, W1, W2):
-    N = n + 1  # Full state size (not the reduced state size!)
-    
-    a_red = np.asarray(state_array, dtype=float).ravel()
-    assert a_red.size == N - 1, f"expected state of length {N-1}, got {a_red.size}"
+    return np.concatenate([a_dot_red, b_dot, c_dot])
 
-    # Create full state vector as 1D array
-    a_fixed_points = np.concatenate([a_red, [1 - np.sum(a_red)]])
-    
-    ones_vec_j = np.ones(W1.shape[0])  # 1D array of length N-1
-
-    onesW1 = ones_vec_j @ W1  # shape (N,)
-    onesW2 = ones_vec_j @ W2  # shape (N,)
-
-    L1a = L1 @ a_fixed_points  # shape (N,)
-    L2a = L2 @ a_fixed_points  # shape (N,)
-    
-    # Compute denominators as scalars
-    denom1 = 1 + ones_vec_j @ (W1 @ a_fixed_points)
-    denom2 = 1 + ones_vec_j @ (W2 @ a_fixed_points)
-
-    # Compute terms - outer product for the second part
-    term1 = (L1 / denom1) - (np.outer(L1a, onesW1) / (denom1**2))   # (N,N)
-    term2 = (L2 / denom2) - (np.outer(L2a, onesW2) / (denom2**2))   # (N,N)
-
-    J = (x_tot * term1) + (y_tot * term2)
-
-    return J[:N-1, :N-1]
-
-def root_finder(n, a_tot_value, x_tot_value, y_tot_value,
+def root_finder(n, a_tot, x_tot, y_tot,
                 alpha_matrix, beta_matrix,
                 k_positive_rates, k_negative_rates,
                 p_positive_rates, p_negative_rates):
 
-    final_sol_list_stable = []
-    final_sol_list_unstable = []
+    red_sol_list_stable = []
+    red_sol_list_unstable = []
     N = n + 1
 
     guesses = []
-    eigenvalues_real_list = []
+    red_eigenvalues_real_list = []
 
-    # build guesses for reduced problem (length N-1)
-    guesses = ALL_GUESSES(N-1, guesses)  # UNCOMMENT THIS!
+    attempt_total_num = 8
+    guesses = []
 
-    attempt_total_num = 10
+    # guesses.append(np.ones(3*N-3)) 
+    # guesses.append(np.zeros(3*N-3))    
+
+    # for i in range(attempt_total_num):
+    #     guesses.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))    # attempt_total_num = 3
+
+    #     guesses.append(np.concatenate([np.array([alpha]), np.zeros(3*N-4)]))    # attempt_total_num = 3
+
     for i in range(attempt_total_num):
-        guess = np.random.rand(N-1)
-        guesses.append(guess / np.sum(guess))
+        guesses.append(guess_generator(n, a_tot, x_tot, y_tot))
 
     Kp, Pp, G, H, Q, M_mat, D, N_mat, L1, L2, W1, W2 = MATRIX_FINDER(
         n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates
     )
 
-    root_tol = 1e-12
-    residual_tol = 1e-8
-    euclidian_distance_tol = 1e-6
-    eigen_value_tol = 1e-8
-    zero_tol = 1e-9  # Changed from 1e-16
+    root_tol = 1e-8
+    residual_tol = 1e-5
+    euclidian_distance_tol = 1e-1
+    eigen_value_tol = 1e-5
     
     for guess in guesses:
+        # assert np.any(np.array(guess) <= 0), f"Guess {guess} is non-physical"
+        assert len(guess) == 3*N - 3, f"Guess {guess} is incorrect length"
+
         try:
-            sol = root(
-                MATTIA_REDUCED_ROOT,
+            reduced_sol = root(
+                MATTIA_FULL_ROOT,
                 x0=guess,
-                args=(n, x_tot_value, y_tot_value, L1, L2, W1, W2),
-                jac=jacobian_reduced_root,
+                args=(n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat),
+                jac=MATTIA_FULL_ROOT_JACOBIAN,
                 method='hybr',
                 tol=root_tol,
                 options={'maxfev': 5000}
             )
         except Exception as e:
-            # print("root() exception:", e)
+            # print(reduced_sol.message)
             continue
 
-        full_sol = np.concatenate([sol.x, [1 - np.sum(sol.x)]])
+        reduced_sol = reduced_sol.x
+
+        residuals = MATTIA_FULL_ROOT(reduced_sol, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
+
+        jacobian_mattia_full = MATTIA_FULL_ROOT_JACOBIAN
+        if np.max(np.abs(residuals)) > residual_tol:
         
-        residual = MATTIA_REDUCED_ROOT(sol.x, n, x_tot_value, y_tot_value, L1, L2, W1, W2)
-        if np.max(np.abs(residual)) > residual_tol:  # Use abs for residual check
-            # print(f"Max residual {np.max(np.abs(residual))} > {residual_tol}: REJECTED")
+            print(f"Residuals {residuals} were not found to obey the tolerance {residual_tol}.")
             continue
 
-        clipping_tolerance = 1e-8
-        if np.any((full_sol < -clipping_tolerance) | (full_sol > 1 + clipping_tolerance)):
-            # print("clipping error, full_sol out of bounds:", full_sol)
+        # if np.any(reduced_sol > 0):
+        #     # print(reduced_sol)
+        #     print("Non-physical fixed point.")
+        #     continue
+
+        def mattia_full_wrapper(state):
+            return MATTIA_FULL_ROOT(state, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
+
+        jacobian_mattia_full = np.array([
+            approx_fprime(reduced_sol, lambda s: mattia_full_wrapper(s)[i], epsilon=1e-8)
+            for i in range(len(reduced_sol))])
+        
+        if not np.isfinite(jacobian_mattia_full).all():
+            print("infinite detected")
             continue
-
-        full_sol = np.clip(full_sol, 0.0, 1.0)
-
-        # compute Jacobian / stability
-        J = stability_calculator(full_sol, x_tot_value, y_tot_value, L1, L2, W1, W2)
-        if not np.isfinite(J).all():
-            # print("stability_calculator returned non-finite J; skipping")
-            continue
-
-        eigenvalues = LA.eigvals(J)
-        eigenvalues_real = np.real(eigenvalues)
-
-        # Filter out eigenvalues from conservation constraint
-        eigenvalues_nonzero = eigenvalues_real[np.abs(eigenvalues_real) > zero_tol]
 
         # duplicate detection
-        if duplicate(full_sol, final_sol_list_stable, euclidian_distance_tol) or \
-           duplicate(full_sol, final_sol_list_unstable, euclidian_distance_tol):
+        if duplicate(reduced_sol, red_sol_list_stable, euclidian_distance_tol) or duplicate(reduced_sol, red_sol_list_unstable, euclidian_distance_tol):
+            print("duplicate detected")
             continue
 
-        # classify by NON-ZERO eigenvalues only
-        if len(eigenvalues_nonzero) == 0:
-            print(f"All eigenvalues near zero - degenerate case")
-            continue
-        elif np.max(eigenvalues_nonzero) > eigen_value_tol:
-            print(f"Unstable: max eigenvalue {np.max(eigenvalues_nonzero):.6e} > {eigen_value_tol}")
-            print(f"  Fixed point: {full_sol}")
-            print(f"  All eigenvalues: {eigenvalues_real}")
-            final_sol_list_unstable.append(full_sol)
-            eigenvalues_real_list.append(eigenvalues_real)
-        elif np.all(eigenvalues_nonzero < -eigen_value_tol):
-            print(f"Stable: all non-zero eigenvalues negative")
-            print(f"  Fixed point: {full_sol}")
-            final_sol_list_stable.append(full_sol)
-            eigenvalues_real_list.append(eigenvalues_real)
+        red_eigenvalues = LA.eigvals(jacobian_mattia_full)
+        red_eigenvalues_real = np.real(red_eigenvalues)
+
+        # print(f"Eigenvalues at fixed point: {red_eigenvalues_real}")
+        if np.max(red_eigenvalues_real) > eigen_value_tol:
+            print(f"UNSTABLE EIGENVALUES: {red_eigenvalues_real}")
+            red_sol_list_unstable.append(reduced_sol)
+            red_eigenvalues_real_list.append(red_eigenvalues_real)
+        elif np.all(red_eigenvalues_real < -eigen_value_tol):
+            print(f"STABLE EIGENVALUES: {red_eigenvalues_real}")
+            red_sol_list_stable.append(reduced_sol)
+            red_eigenvalues_real_list.append(red_eigenvalues_real)
         else:
-            print(f"Marginally stable eigenvalues: {eigenvalues_nonzero}")
+            print(f" -> Marginally stable")
 
-    print(f"# of stable points found is {len(final_sol_list_stable)}, and # of unstable states found is {len(final_sol_list_unstable)}")
+    print(f"\n# of stable points: {len(red_sol_list_stable)}, # of unstable points: {len(red_sol_list_unstable)}")
 
-    if (len(final_sol_list_stable) == 0) and (len(final_sol_list_unstable) == 0):
+    if (len(red_sol_list_stable) == 0) and (len(red_sol_list_unstable) == 0):
         return np.array([]), np.array([]), np.array([])
     
-    return np.array(final_sol_list_stable), np.array(final_sol_list_unstable), np.array(eigenvalues_real_list)
+    return np.array(red_sol_list_stable), np.array(red_sol_list_unstable), np.array(red_eigenvalues_real_list)
 
 def process_sample_script(i,
                    n,
                    a_tot_value,
-                   x_tot_value_parameter_array,
-                   y_tot_value_parameter_array,
+                   x_tot_value,
+                   y_tot_value,
                    alpha_matrix_parameter_array,
                    beta_matrix_parameter_array,
                    k_positive_parameter_array,
                    k_negative_parameter_array,
                    p_positive_parameter_array,
                    p_negative_parameter_array):
-    
+    N = n+1
+    alpha_matrix = alpha_matrix_parameter_array[i]
+    beta_matrix = beta_matrix_parameter_array[i]
     k_positive_rates = k_positive_parameter_array[i]
     k_negative_rates = k_negative_parameter_array[i]
     p_positive_rates = p_positive_parameter_array[i]
     p_negative_rates = p_negative_parameter_array[i]
-    x_tot_value = x_tot_value_parameter_array[i][0]
-    y_tot_value = y_tot_value_parameter_array[i][0]
+    rate_min, rate_max = 1e-2, 1e2
+
+    # k_positive_rates = np.array([3.2511345282947435, 5.0660064823006525])
+    # k_negative_rates = np.array([0.013168070763133404, 1.9918361184817839])
+    # p_positive_rates = np.array([5.544441039779104, 63.48549752309308])
+    # p_negative_rates = np.array([1.4041390815765653, 0.14205077577290087])
+    # alpha_matrix = np.array([[0, 0.03522122035395812, 0],
+    #                          [0, 0, 0.08029528726005944],
+    #                          [0, 0, 0]])
+    # beta_matrix = np.array([[0, 0, 0],
+    #                         [16.037025320671066, 0, 0],
+    #                         [0, 0.020117127980135444, 0]])
+
+    # k_positive_rates = np.array([26.804, 49.1102])
+    # k_negative_rates = np.array([0.21392, 0.03212])
+    # p_positive_rates = np.array([2.0276, 92.0147])
+    # p_negative_rates = np.array([1.4041390815765653, 0.14205077577290087])
+    # alpha_matrix = np.array([[0, 0.0110415, 0],
+    #                          [0, 0, 7.828938],
+    #                          [0, 0, 0]])
+    # beta_matrix = np.array([[0, 0, 0],
+    #                         [0.117683, 0, 0],
+    #                         [0, 1.84386, 0]])
     
-    rate_min, rate_max = 1e-1, 1e7
+    # k_positive_rates = k_positive_rates / np.mean(k_positive_rates)
+    # k_positive_rates = np.clip(k_positive_rates, rate_min, rate_max)
+    # k_negative_rates = k_negative_rates / np.mean(k_negative_rates)
+    # k_negative_rates = np.clip(k_negative_rates, rate_min, rate_max)
 
-    k_positive_rates = k_positive_rates / np.mean(k_positive_rates)
-    p_positive_rates = p_positive_rates / np.mean(p_positive_rates)
-    k_positive_rates = np.clip(k_positive_rates, rate_min, rate_max)
-    p_positive_rates = np.clip(p_positive_rates, rate_min, rate_max)
-    k_negative_rates = k_positive_rates
-    p_negative_rates = p_positive_rates
+    # p_positive_rates = p_positive_rates / np.mean(p_positive_rates)
+    # p_positive_rates = np.clip(p_positive_rates, rate_min, rate_max)
+    # p_negative_rates = p_negative_rates / np.mean(p_negative_rates)
+    # p_negative_rates = np.clip(p_negative_rates, rate_min, rate_max)
 
-    # normalize
-    alpha_matrix = alpha_matrix_parameter_array[i] / np.mean(alpha_matrix_parameter_array[i])
-    beta_matrix = beta_matrix_parameter_array[i] / np.mean(beta_matrix_parameter_array[i])
+    # alpha_matrix = alpha_matrix_parameter_array[i] / np.mean(alpha_matrix_parameter_array[i])
+    # alpha_matrix = matrix_clip(alpha_matrix, rate_min, rate_max)
+    # beta_matrix = beta_matrix_parameter_array[i] / np.mean(beta_matrix_parameter_array[i])
+    # beta_matrix = matrix_clip(beta_matrix, rate_min, rate_max)
 
-    # clipping
-    alpha_matrix = matrix_clip(alpha_matrix); beta_matrix = matrix_clip(beta_matrix)
+    k_positive_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
+    k_negative_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)    
+    p_positive_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
+    p_negative_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
+
+    alpha_matrix = np.diag(reciprocal(a=rate_min, b=rate_max).rvs(size=N-1), k = 1)
+    beta_matrix = np.diag(reciprocal(a=rate_min, b=rate_max).rvs(size=N-1), k = -1)
 
     multistable_results = None
     
@@ -205,7 +230,8 @@ def process_sample_script(i,
                                                      k_negative_rates, p_positive_rates, p_negative_rates)
     
     possible_steady_states = np.floor((n + 2) / 2).astype(int)
-    # if len(unique_stable_fp_array) == 1:
+
+    # if len(unique_unstable_fp_array) == 1:
     if len(unique_stable_fp_array) == 2 and len(unique_unstable_fp_array) == 1:
         multistable_results = {
         "num_of_stable_states": len(unique_stable_fp_array),
@@ -213,23 +239,32 @@ def process_sample_script(i,
         "stable_states": np.array([unique_stable_fp_array[k] for k in range(len(unique_stable_fp_array))]),
         "unstable_states": np.array([unique_unstable_fp_array[k] for k in range(len(unique_unstable_fp_array))]),
         "total_concentration_values": np.array([a_tot_value, x_tot_value, y_tot_value]),
-        "alpha_matrix": alpha_matrix_parameter_array[i],
-        "beta_matrix": beta_matrix_parameter_array[i],
-        "k_positive_rates": k_positive_parameter_array[i],
-        "k_negative_rates": k_negative_parameter_array[i],
-        "p_positive_rates": p_positive_parameter_array[i],
-        "p_negative_rates": p_negative_parameter_array[i],
+        "alpha_matrix": alpha_matrix,
+        "beta_matrix": beta_matrix,
+        "k_positive_rates": k_positive_rates,
+        "k_negative_rates": k_negative_rates,
+        "p_positive_rates": p_positive_rates,
+        "p_negative_rates": p_negative_rates,
+        # "alpha_matrix": alpha_matrix_parameter_array[i],
+        # "beta_matrix": beta_matrix_parameter_array[i],
+        # "k_positive_rates": k_positive_parameter_array[i],
+        # "k_negative_rates": k_negative_parameter_array[i],
+        # "p_positive_rates": p_positive_parameter_array[i],
+        # "p_negative_rates": p_negative_parameter_array[i],
         "eigenvalues": eigenvalues_array
         }
 
     return multistable_results
 
 def simulation_root(n, simulation_size):
-    a_tot_value = 1
+    a_tot = 1
     N = n + 1
-
-    gen_rates = all_parameter_generation(n, "distributive", "gamma", (0.123, 4.46e6), verbose = False)
-    rate_min, rate_max = 1e-1, 1e7
+    N = n + 1
+    x_tot = 1e-3
+    y_tot = 1e-3
+    old_best_gamma_parameters = (0.123, 4.46e6)
+    new_gamma_parameters = (1e8, 1e8)
+    gen_rates = all_parameter_generation(n, "distributive", "gamma", new_gamma_parameters, verbose = False)
     alpha_matrix_parameter_array = np.array([gen_rates.alpha_parameter_generation() for _ in range(simulation_size)]) # CANNOT CLIP
     beta_matrix_parameter_array = np.array([gen_rates.beta_parameter_generation() for _ in range(simulation_size)]) # CANNOT CLIP
     # k_positive_parameter_array = np.array([np.ones(N - 1) for _ in range(simulation_size)])
@@ -241,17 +276,17 @@ def simulation_root(n, simulation_size):
     p_positive_parameter_array = np.array([gen_rates.p_parameter_generation()[0] for _ in range(simulation_size)])
     p_negative_parameter_array = np.array([gen_rates.p_parameter_generation()[1] for _ in range(simulation_size)])
     gen_concentrations = all_parameter_generation(n, "distributive", "gamma", (0.40637, 0.035587), verbose = False)
-    concentration_min, concentration_max = 1e-4, 1e-1
-    x_tot_value_parameter_array = np.array([np.clip(gen_concentrations.total_concentration_generation()[0], concentration_min, concentration_max) for _ in range(simulation_size)])
-    y_tot_value_parameter_array = np.array([np.clip(gen_concentrations.total_concentration_generation()[1], concentration_min, concentration_max) for _ in range(simulation_size)])
+    # concentration_min, concentration_max = 1e-4, 1e-1
+    # x_tot_value_parameter_array = np.array([x_tot*np.ones(1) for _ in range(simulation_size)])
+    # y_tot_value_parameter_array = np.array([y_tot*np.ones(1)  for _ in range(simulation_size)])
 
     results = Parallel(n_jobs=-2, backend="loky")(
         delayed(process_sample_script)(
             i,
             n,
-            a_tot_value,
-            x_tot_value_parameter_array,
-            y_tot_value_parameter_array,
+            a_tot,
+            x_tot,
+            y_tot,
             alpha_matrix_parameter_array,
             beta_matrix_parameter_array,
             k_positive_parameter_array,
@@ -275,7 +310,7 @@ def simulation_root(n, simulation_size):
 
 def main():
     n = 2
-    simulation_root(n, 200)
+    simulation_root(n, 20000)
     
 if __name__ == "__main__":
     main()

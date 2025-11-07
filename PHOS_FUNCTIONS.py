@@ -1,34 +1,38 @@
 import numpy as np
 from typing import List, Tuple, Dict, Any, Set
-import matplotlib.pyplot as plt
-from scipy.integrate import solve_ivp
-from joblib import Parallel, delayed
-import pickle
 import random as rnd
 from scipy.stats import levy
+import random as random
 
 def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates):
 
     N = n + 1
     ones_vec = np.ones(N - 1)
+    # ones_vec = np.ones((1, N - 1))
     # ones_vec = np.ones((1, N-1), dtype = float) # shape (1, N-1)
 
     Kp = np.diag(np.append(k_positive_rates, 0))
     Km = np.append(np.diag(k_negative_rates), np.zeros((1, len(k_negative_rates))), axis=0)
     assert Kp.shape == (N, N), f"Kp shape must be ({N}, {N})"
     assert Km.shape == (N, N-1), f"Km shape must be ({N}, {N-1})"
-    # print(Kp)
-    # print(Km)
     
     Pp = np.diag(np.insert(p_positive_rates, 0, 0))
     Pm = np.vstack([np.zeros((1, len(p_negative_rates))), np.diag(p_negative_rates)])    # print("a", a)
     assert Pp.shape == (N, N), f"Pp shape must be ({N}, {N})"
     assert Pm.shape == (N, N-1), f"Pm shape must be ({N}, {N-1})"
-
+    # print("Kp")
+    # print(np.asarray(Kp, dtype = float))
+    # print("Pp")
+    # print(Pp)
     adjusted_alpha_mat = np.delete(alpha_matrix, -1, axis = 0)
+    # print("adjusted_alpha_mat.T")
+    # print(adjusted_alpha_mat.T)
     adjusted_beta_mat = np.delete(beta_matrix, 0, axis = 0)
+    # print("adjusted_beta_mat.T")
+    # print(adjusted_beta_mat.T)
     assert adjusted_alpha_mat.shape == (N-1, N), f"adjusted_alpha_mat shape must be ({N-1}, {N})"
     assert adjusted_beta_mat.shape == (N-1, N), f"adjusted_beta_mat shape must be ({N-1}, {N})"
+
     Da = np.diag(alpha_matrix[:-1, 1:] @ ones_vec)
     Db = np.diag(beta_matrix[1:, :-1] @ ones_vec)
     assert Da.shape == (N-1, N-1), f"Da shape must be ({N-1}, {N-1})"
@@ -48,7 +52,9 @@ def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rat
     N_mat = I + Db
 
     G = Km + adjusted_alpha_mat.T
+
     H = Pm + adjusted_beta_mat.T
+
     assert G.shape == (N, N-1), f"G shape must be ({N}, {N-1})"
     assert H.shape == (N, N-1), f"H shape must be ({N}, {N-1})"
     M_inv = np.linalg.inv(M_mat); N_inv = np.linalg.inv(N_mat)
@@ -62,95 +68,31 @@ def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rat
 
     return Kp, Pp, G, H, Q, M_mat, D, N_mat, L1, L2, W1, W2
 
-# def MATTIA_FULL(t, state_array, n, Kp, Pp, G, H, Q, M_mat, D, N_mat):
+def MATTIA_FULL(t, state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
 
-#     N = n + 1
-#     # N = n**2
-#     # ones_vec = np.ones(N - 1)
-#     ones_vec = np.ones((1, N-1), dtype = float) # shape (1, N-1)
+    # including conservation laws
+    # state_array = [a0, a1, b0, b1, c1, c2]
 
-#     # assert len(state_array) == 3*N
-#     # print(state_array)
-#     a = state_array[0: N]
-#     b = state_array[N: 2*N - 1]
-#     c = state_array[2*N - 1: 3*N - 2]
-#     x = float(state_array[-2])
-#     y = float(state_array[-1])
+    N = n + 1
+    assert len(state_array) == 3*N - 3
+    a_red = state_array[0: N - 1]
+    b = state_array[N - 1: 2*N - 2]
+    c = state_array[2*N - 2: 3*N - 3]
 
-#     a_dot = (G @ b) + (H @ c) - x * (Kp @ a) - y * (Pp @ a)  
-#     b_dot = x * (Q @ a) - (M_mat @ b)
-#     c_dot = y * (D @ a) - (N_mat @ c)
+    a = np.concatenate([a_red, [a_tot - np.sum(a_red) - np.sum(b) - np.sum(c)]])
+    x = x_tot - np.sum(b)
+    y = y_tot - np.sum(c)
 
-#     x_dot = -1*ones_vec.T @ b_dot
-#     y_dot = -1*ones_vec.T @ c_dot
+    a_dot = (G @ b) + (H @ c) - x * (Kp @ a) - y * (Pp @ a)  
+    b_dot = x * (Q @ a) - (M_mat @ b)
+    c_dot = y * (D @ a) - (N_mat @ c)
 
-#     return np.concatenate((a_dot, b_dot, c_dot, np.array([x_dot, y_dot])))
+    x_dot = -1*np.sum(b_dot)
+    y_dot = -1*np.sum(c_dot)
 
-def MATTIA_REDUCED(t, state_array, n, x_tot, y_tot, L1, L2, W1, W2):
-    N = state_array.size
-    ones_vec = np.ones(W1.shape[0])   # length N-1
+    a_dot_red = a_dot[0: N-1]
 
-    a = np.asarray(state_array, dtype=float).ravel()
-    assert len(a) == N
-
-    # Compute denominator scalars
-    denom1 = 1 + ones_vec @ (W1 @ a)
-    denom2 = 1 + ones_vec @ (W2 @ a)
-    
-    # Compute a_dot as 1D array
-    a_dot = ((x_tot * (L1 @ a)) / denom1) + ((y_tot * (L2 @ a)) / denom2)
-
-    return a_dot
-
-def MATTIA_REDUCED_JACOBIAN(t, state_array, n, x_tot, y_tot, L1, L2, W1, W2):
-    N = state_array.size
-    state_array = np.asarray(state_array, dtype=float).ravel()
-    assert state_array.size == N, f"expected state length {N}, got {state_array.size}"
-
-    ones_vec_j = np.ones(W1.shape[0])  # length N-1
-
-    onesW1 = (ones_vec_j.T @ W1).ravel()  # shape (N,)
-    onesW2 = (ones_vec_j.T @ W2).ravel()  # shape (N,)
-
-    L1a = L1 @ state_array  # shape (N,)
-    L2a = L2 @ state_array  # shape (N,)
-
-    # Compute denominators as scalars
-    denom1 = 1 + ones_vec_j @ (W1 @ state_array)
-    denom2 = 1 + ones_vec_j @ (W2 @ state_array)
-
-    # Use outer product to get (N, N) matrices
-    term1 = (L1 / denom1) - (np.outer(L1a, onesW1) / (denom1**2))   # (N,N)
-    term2 = (L2 / denom2) - (np.outer(L2a, onesW2) / (denom2**2))   # (N,N)
-
-    J = (x_tot * term1) + (y_tot * term2)
-
-    return J
-
-def stability_calculator(a_fixed_points, x_tot, y_tot, L1, L2, W1, W2):
-    N = a_fixed_points.size
-    state_array = np.asarray(a_fixed_points, dtype=float).ravel()
-    assert state_array.size == N, f"expected state length {N}, got {state_array.size}"
-
-    ones_vec_j = np.ones(W1.shape[0])  # 1D array of length N-1
-
-    onesW1 = ones_vec_j @ W1  # shape (N,)
-    onesW2 = ones_vec_j @ W2  # shape (N,)
-
-    L1a = L1 @ state_array  # shape (N,)
-    L2a = L2 @ state_array  # shape (N,)
-
-    # Compute denominators as scalars
-    denom1 = 1 + ones_vec_j @ (W1 @ state_array)
-    denom2 = 1 + ones_vec_j @ (W2 @ state_array)
-
-    # Use outer product to get (N, N) matrices
-    term1 = (L1 / denom1) - (np.outer(L1a, onesW1) / (denom1**2))   # (N,N)
-    term2 = (L2 / denom2) - (np.outer(L2a, onesW2) / (denom2**2))   # (N,N)
-
-    J = (x_tot * term1) + (y_tot * term2)
-
-    return J
+    return np.concatenate([a_dot_red, b_dot, c_dot])
 
 class all_parameter_generation:
     """
@@ -297,48 +239,35 @@ class all_parameter_generation:
             y_tot_concentration = self.rng.gamma(shape, scale, 1)
 
         return x_tot_concentration, y_tot_concentration
-    
-def ALL_GUESSES(N, guesses):
 
-    rng = np.random.default_rng()
 
-    # 1. Very sharp corners: one component dominates (alpha << 1)
-    for _ in range(N):
-        alpha_sharp = np.full(N, 0.1)  # Small alpha pushes to corners
-        guess = rng.dirichlet(alpha_sharp)
-        guesses.append(guess)  # Remove last component for reduced system
-    
-    # 2. Edges: two components share mass (set others to very small alpha)
-    edge_samples_per_pair = 2
-    for i in range(N):
-        for j in range(i+1, N):
-            for _ in range(edge_samples_per_pair):
-                alpha_edge = np.full(N, 0.05)  # Very small for components not on edge
-                alpha_edge[i] = 1.0  # Moderate for edge components
-                alpha_edge[j] = 1.0
-                guess = rng.dirichlet(alpha_edge)
-                guesses.append(guess)
-    
-    # 3. Faces: k components share mass equally
-    for n_active in range(2, N+1):
-        for _ in range(2):  # 2 samples per face
-            alpha_face = np.full(N, 0.05)
-            alpha_face[:n_active] = 1.0
-            guess = rng.dirichlet(alpha_face)
-            guesses.append(guess)
-    
-    # 4. Uniform-ish distribution (alpha = 1 is uniform)
-    for _ in range(3):
-        guess = rng.dirichlet(np.ones(N))
-        guesses.append(guess)
-    
-    # 5. Slightly perturbed corners (exact corners)
-    for i in range(N):
-        corner = np.zeros(N)
-        corner[i] = 1.0
-        guesses.append(corner)
+def guess_generator(n, a_tot, x_tot, y_tot):
+    N = n + 1
 
-    return guesses
+    bx_splits = sorted([random.uniform(0, x_tot) for _ in range(N - 1)])
+    bx_values = [bx_splits[0]] + [bx_splits[i] - bx_splits[i-1] for i in range(1, N-1)] + [x_tot - bx_splits[-1]]
+    b_guess = bx_values[0:N-1]
+    x_guess = bx_values[-1]
+    # print(b_guess)
+    # print(x_guess)
+
+    cy_splits = sorted([random.uniform(0, y_tot) for _ in range(N - 1)])
+    cy_values = [cy_splits[0]] + [cy_splits[i] - cy_splits[i-1] for i in range(1, N-1)] + [x_tot - cy_splits[-1]]
+    c_guess = cy_values[0:N-1]
+    y_guess = cy_values[-1]
+    # print(c_guess)
+    # print(y_guess)
+
+    total = a_tot - sum(b_guess) - sum(c_guess)
+    a_splits = sorted([random.uniform(0, total) for _ in range(N - 1)])
+    a_values = [a_splits[0]] + [a_splits[i] - a_splits[i-1] for i in range(1, N-1)] + [total - a_splits[-1]]
+    # print(a_values)
+    a_guess = a_values[0:N-1]
+    # print(a_guess)
+    a_guess.extend(b_guess)
+    a_guess.extend(c_guess)
+    guess_list = a_guess
+    return guess_list
 
 def duplicate(candidate, collection, euclidian_distance_tol):
     """Check if candidate is close to any vector in collection"""
@@ -346,12 +275,13 @@ def duplicate(candidate, collection, euclidian_distance_tol):
         return False
     
     for v in collection:
-        if (np.linalg.norm(np.array(v) - np.array(candidate)) < euclidian_distance_tol) and np.allclose(v, candidate):
+        # if (np.linalg.norm(np.array(v) - np.array(candidate)) < euclidian_distance_tol):
+        if (np.linalg.norm(np.array(v) - np.array(candidate)) < euclidian_distance_tol) and (np.allclose(v, candidate, atol = 1e-10)):
             return True
     return False
 
-def matrix_clip(matrix):
-    rate_min, rate_max = 1e-1, 1e7
+def matrix_clip(matrix, rate_min, rate_max):
+
     clipped = matrix.copy()
     mask = clipped != 0
     clipped[mask] = np.clip(clipped[mask], rate_min, rate_max)
@@ -368,42 +298,7 @@ def pertubation_array_creation(ic_array, pertubation_parameter):
 
 def main():
     n = 2
-    gen_rates = all_parameter_generation(n, "distributive", "gamma", (0.123, 4.46e6), verbose = False)
-    rate_min, rate_max = 1e-1, 1e7
-    alpha_matrix = gen_rates.alpha_parameter_generation()
-    beta_matrix = gen_rates.beta_parameter_generation()
-    k_positive_rates = gen_rates.k_parameter_generation()[0]
-    k_negative_rates = gen_rates.k_parameter_generation()[1]
-    p_positive_rates = gen_rates.p_parameter_generation()[0]
-    p_negative_rates = gen_rates.p_parameter_generation()[1]
-    Kp, Pp, G, H, Q, M_mat, D, N_mat, L1, L2, W1, W2 = MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates)
 
-    rate_min, rate_max = 1e-1, 1e7
-
-    k_positive_rates = k_positive_rates / np.mean(k_positive_rates)
-    p_positive_rates = p_positive_rates / np.mean(p_positive_rates)
-    k_positive_rates = np.clip(k_positive_rates, rate_min, rate_max)
-    p_positive_rates = np.clip(p_positive_rates, rate_min, rate_max)
-    k_negative_rates = k_positive_rates
-    p_negative_rates = p_positive_rates
-
-    # normalize
-    alpha_matrix = alpha_matrix / np.mean(alpha_matrix)
-    beta_matrix = beta_matrix / np.mean(beta_matrix)
-
-    # clipping
-    alpha_matrix = matrix_clip(alpha_matrix); beta_matrix = matrix_clip(beta_matrix)
-    # print(alpha_matrix)
-    # print(beta_matrix)
-    # print(k_positive_rates)
-    # print(k_negative_rates)
-    # print(p_positive_rates)
-    # print(p_negative_rates)
-
-    test_array = np.array([0.2, 0.5, 0.3]); pertubation_parameter = 0.1
-    print(f"initial state array: {test_array}")
-    pertubation_array = pertubation_array_creation(test_array, pertubation_parameter)
-    print(f"perturbed initial state: {test_array + pertubation_array}")
 
 if __name__ == "__main__":
     main()

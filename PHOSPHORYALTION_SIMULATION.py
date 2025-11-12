@@ -4,12 +4,12 @@ import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 import pickle
 import random
-from PHOS_FUNCTIONS import MATRIX_FINDER, MATTIA_FULL, guess_generator
+from PHOS_FUNCTIONS import MATRIX_FINDER, MATTIA_FULL, guess_generator, matrix_normalize
 
 def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_t):
 
     n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates, a_tot, x_tot, y_tot = parameters_tuple
-    N = n + 1
+    N = 2**n
 
     assert np.all(initial_states_array >= 0)
 
@@ -18,7 +18,7 @@ def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_
     t_span = (initial_t, final_t)
 
     ###### OBTAINING ALL MATRICES
-    Kp, Pp, G, H, Q, M_mat, D, N_mat, L1, L2, W1, W2 = MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates)
+    Kp, Pp, G, H, Q, M_mat, D, N_mat = MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates)
     cmap = plt.get_cmap('Accent')
     def color_for_species(idx):
         return cmap(idx / (3 * N - 3))  # smooth gradient of distinct colors
@@ -43,7 +43,7 @@ def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_
         color = color_for_species(i)
         plt.plot(sol.t, a_solution_stack[i], color=color, label = f"[$A_{i}]$", lw=4, alpha = 0.9)
         # print(f"final A_{i} = {a_solution_stack[i][-1]}")
-        plt.title(f"Plotting reduced phosphorylation dynamics for n = {n}")
+        plt.title(f"phosphorylation dynamics for n = {n}")
 
     color_N = color_for_species(N-1)
     plt.plot(sol.t, a_N_array, color=color_N, label=f"$[A_{{{N-1}}}]$", lw=4, alpha=0.9)
@@ -77,7 +77,7 @@ def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_
     
 def plotter(index, final_t, file_name):
     n = int(file_name[-5:-4])
-    N = n + 1
+    N = 2**n
 
     with open(file_name, "rb") as f:
         multistable_results = pickle.load(f)
@@ -100,13 +100,35 @@ def plotter(index, final_t, file_name):
     p_positive_rates = multistable_results[index]["p_positive_rates"]
     p_negative_rates = multistable_results[index]["p_negative_rates"]
 
-    attempt_total_num = int(1.75*N)
 
+    # NORMALIZING
+    # sum_rates = np.sum(alpha_matrix) + np.sum(beta_matrix) + np.sum(k_positive_rates) + \
+    #      np.sum(k_negative_rates) + np.sum(p_positive_rates) + np.sum(p_negative_rates)
+    # mean_all_rates = sum_rates / 20
+    # alpha_matrix = alpha_matrix / mean_all_rates
+    # beta_matrix = beta_matrix / mean_all_rates
+    # k_positive_rates = k_positive_rates / mean_all_rates
+    # k_negative_rates = k_negative_rates / mean_all_rates
+    # p_positive_rates = p_positive_rates / mean_all_rates
+    # p_negative_rates = p_negative_rates / mean_all_rates
+
+    attempt_total_num = 8
     initial_conditions_list = []
+    # guesses.append(1e-14*np.ones(3*N - 3))
+    # guesses.append(np.concatenate([np.array([1-1e-14]), np.zeros(3*N-4)]))
+    initial_conditions_list.append(np.zeros(3*N - 3))
+    initial_conditions_list.append(1e-5*np.ones(3*N - 3))
+    initial_conditions_list.append(np.concatenate([np.array([1]), np.zeros(3*N-4)]))
+
+    for i in range(5):
+        t = np.random.rand(N)
+        t /= t.sum()
+        t = t[:-1]
+        initial_conditions_list.append(np.concatenate([t, np.zeros(2*N-2)]))
 
     for i in range(attempt_total_num):
-        initial_conditions_list.append(np.concatenate([np.zeros(1), np.array([random.random()]), np.zeros(3*N-5)]))
         initial_conditions_list.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
+        # initial_conditions_list.append(guess_generator(n, a_tot, x_tot, y_tot))
         initial_conditions_list.append(guess_generator(n, a_tot_parameter, x_tot_parameter, y_tot_parameter))
 
     for guess in initial_conditions_list:
@@ -115,9 +137,9 @@ def plotter(index, final_t, file_name):
         phosphorylation_system_solver(parameters_tuple, np.array(guess), final_t)
 
 def main():
-    file_name = "multistability_parameters_500_4.pkl"
+    file_name = "multistability_parameters_1500_2.pkl"
 
-    index = 0
+    index = 1
 
     final_t = 10000000
     plotter(index, final_t, file_name)

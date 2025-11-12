@@ -59,18 +59,26 @@ def MATTIA_FULL_ROOT(state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat
 
     return np.concatenate([a_dot_red, b_dot, c_dot])
 
+def deflated_function(vec, roots, params):
+    alpha = 1e-2; p = 2;
+    M = 1.0
+    for r in roots:
+        M *= 1.0 / (np.linalg.norm(vec - r)**p + alpha)
+    return M * MATTIA_FULL_ROOT(vec, *params)
+
 def root_finder(n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
 
     red_sol_list_stable = []
     red_sol_list_unstable = []
     N = 2**n
 
+    sol_list = []
+
     guesses = []
     red_eigenvalues_real_list = []
     guesses.append(1e-14*np.ones(3*N - 3))
     guesses.append(np.concatenate([np.array([1-1e-14]), np.zeros(3*N-4)]))
     attempt_total_num = 8
-    guesses = []
 
     guesses.append(np.zeros(3*N - 3))
     guesses.append(1e-5*np.ones(3*N - 3))
@@ -89,54 +97,78 @@ def root_finder(n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
     root_tol = 1e-6
     residual_tol = 1e-8
     euclidian_distance_tol = 1e-6
-    eigen_value_tol = 1e-6
+    eigen_value_tol = 1e-8
     
+    params = (n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
     for guess in guesses:
         # assert np.any(np.array(guess) <= 0), f"Guess {guess} is non-physical"
         assert len(guess) == 3*N - 3, f"Guess {guess} is incorrect length"
 
         try:
             reduced_sol = root(
-                MATTIA_FULL_ROOT,
+                lambda v: deflated_function(v, sol_list, params),
                 x0=guess,
-                args=(n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat),
-                jac=MATTIA_FULL_ROOT_JACOBIAN,
+                # args=(sol_list, params),
+                # jac=MATTIA_FULL_ROOT_JACOBIAN,
                 method='hybr',
                 tol=root_tol,
-                options={'maxfev': 5000}
-            )
-        except Exception as e:
-            # print(reduced_sol.message)
+                options={'maxfev': 5000})
+        except TypeError as e:
             continue
+
+        # if all(np.linalg.norm(reduced_sol - r) > 1e-6 for r in reduced_sol):
+        #     sol_list.append(reduced_sol)
+
+        # if not reduced_sol.success:
+        #     continue
 
         reduced_sol = reduced_sol.x
 
-        residuals = MATTIA_FULL_ROOT(reduced_sol, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
-
+        residuals = MATTIA_FULL_ROOT(reduced_sol, *params)
         if np.max(np.abs(residuals)) > residual_tol:
-            # print(f"Residuals {residuals} were not found to obey the tolerance {residual_tol}.")
+            # reject if residual too large
             continue
 
-        zero_tol = 1e-8
+        # Reject if non-physical (strong negative tolerated by some tol)
+        zero_tol = 1e-10
         if np.any(reduced_sol < -zero_tol):
-            # print(reduced_sol)
-            print("Non-physical fixed point.")
+            # non-physical
             continue
 
-        def mattia_full_wrapper(state):
-            return MATTIA_FULL_ROOT(state, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
+        # Duplicate detection: compare reduced_sol to previously found solutions
+        is_duplicate = False
+        for r in sol_list:
+            if np.linalg.norm(reduced_sol - r) <= euclidian_distance_tol:
+                is_duplicate = True
+                break
+        if is_duplicate:
+            continue
+
+        # Accept this root
+        sol_list.append(reduced_sol)
+        # residuals = MATTIA_FULL_ROOT(reduced_sol, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
+
+        # if np.max(np.abs(residuals)) > residual_tol:
+        #     # print(f"Residuals {residuals} were not found to obey the tolerance {residual_tol}.")
+        #     continue
+
+        # zero_tol = 1e-8
+        # if np.any(reduced_sol < -zero_tol):
+        #     # print(reduced_sol)
+        #     print("Non-physical fixed point.")
+        #     continue
+
+    for sol in sol_list:
+
+        def mattia_full_wrapper(v):
+            return MATTIA_FULL_ROOT(v, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
 
         jacobian_mattia_full = np.array([
-            approx_fprime(reduced_sol, lambda s: mattia_full_wrapper(s)[i], epsilon=1e-8)
-            for i in range(len(reduced_sol))])
+            approx_fprime(sol, lambda s: mattia_full_wrapper(s)[i], epsilon=1e-8)
+            for i in range(len(sol))])
         
         if not np.isfinite(jacobian_mattia_full).all():
             print("infinite detected")
-            continue
-
-        # duplicate detection
-        if duplicate(reduced_sol, red_sol_list_stable, euclidian_distance_tol) or duplicate(reduced_sol, red_sol_list_unstable, euclidian_distance_tol):
-            print("duplicate detected")
             continue
 
         red_eigenvalues = LA.eigvals(jacobian_mattia_full)
@@ -145,17 +177,18 @@ def root_finder(n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
         # print(f"Eigenvalues at fixed point: {red_eigenvalues_real}")
         if np.max(red_eigenvalues_real) > eigen_value_tol:
             print(f"UNSTABLE EIGENVALUES: {red_eigenvalues_real}")
-            red_sol_list_unstable.append(reduced_sol)
+            red_sol_list_unstable.append(sol)
             red_eigenvalues_real_list.append(red_eigenvalues_real)
         elif np.all(red_eigenvalues_real < -eigen_value_tol):
             print(f"STABLE EIGENVALUES: {red_eigenvalues_real}")
-            red_sol_list_stable.append(reduced_sol)
+            red_sol_list_stable.append(sol)
             red_eigenvalues_real_list.append(red_eigenvalues_real)
         else:
             print(f" -> Marginally stable")
 
     print(f"\n# of stable points: {len(red_sol_list_stable)}, # of unstable points: {len(red_sol_list_unstable)}")
-
+    # print(f"\n# of fixed points: {len(sol_list)}")
+    
     if (len(red_sol_list_stable) == 0) and (len(red_sol_list_unstable) == 0):
         return np.array([]), np.array([]), np.array([])
     
@@ -198,7 +231,7 @@ def process_sample_script(i,
     possible_steady_states = np.floor((n + 2) / 2).astype(int)
 
     # if len(unique_unstable_fp_array) == 1:
-    if len(unique_stable_fp_array) == 2 and len(unique_unstable_fp_array) == 1:
+    if len(unique_stable_fp_array) == possible_steady_states:
         multistable_results = {
         "num_of_stable_states": len(unique_stable_fp_array),
         "num_of_unstable_states": len(unique_unstable_fp_array),
@@ -218,8 +251,8 @@ def process_sample_script(i,
 
 def simulation_root(n, simulation_size):
     a_tot = 1
-    x_tot = 1e-2
-    y_tot = 1e-2
+    x_tot = 1e-3
+    y_tot = 1e-3
     old_best_gamma_parameters = (0.123, 4.46e6)
     new_gamma_parameters = (1, 10)
     gen_rates = all_parameter_generation(n, "distributive", "gamma", new_gamma_parameters, verbose = False)
@@ -264,7 +297,7 @@ def simulation_root(n, simulation_size):
 
 def main():
     n = 2
-    simulation_root(n, 1000)
+    simulation_root(n, 100)
     
 if __name__ == "__main__":
     main()

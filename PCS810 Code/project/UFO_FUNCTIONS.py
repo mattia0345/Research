@@ -119,7 +119,6 @@ def time_obtain_list(list, clock_time_given):
     return total_minute_occurence_list.tolist()
 
 def data_acquisition(file_name):
-    file_name = file_name
     df = pd.read_csv(file_name, dtype=str, skiprows = 0, header=None)
     # df = pd.read_csv(file_name, dtype={'a': np.float64, 'b': np.int32, 'c': 'Int64'})
     data = df.to_numpy()
@@ -139,7 +138,7 @@ def data_acquisition(file_name):
     # # lat_long_list = batch_get_coordinates(csc_list)
     # np.savetxt('latitude_longitude_data.csv', lat_long_list, delimiter=',')
 
-    latitude_list, longitude_list = np.genfromtxt("latitude_longitude_data.csv", delimiter=',', unpack=True)
+    latitude_list, longitude_list = np.genfromtxt("PCS810 Code/project/latitude_longitude_data.csv", delimiter=',', unpack=True)
 
     nan_mask = ~np.isnan(latitude_list)
     latitude_list, longitude_list, country_array, city_array, state_array, ufo_shape_array, date_reported_array, date_occurence_array, ufo_description_array = [arr[nan_mask] for arr in [latitude_list, longitude_list, country_array, city_array, state_array, ufo_shape_array, date_reported_array, date_occurence_array, ufo_description_array]]
@@ -246,35 +245,63 @@ def network_creation_function(file_name, distance_threshold, network_percentage,
             added_nodes.append(node)
 
         if ufo_network.number_of_nodes() > 0:
-            k_avg_list.append(np.mean([d for _, d in ufo_network.degree()]))
+        #     k_avg_list.append(np.mean([d for _, d in ufo_network.degree()]))
 
-            if ufo_network.number_of_nodes() > 1:
-                average_clustering_coefficient_list.append(np.mean(list(nx.clustering(ufo_network).values())))
-            else:
-                average_clustering_coefficient_list.append(0.0)
+        #     if ufo_network.number_of_nodes() > 1:
+        #         average_clustering_coefficient_list.append(np.mean(list(nx.clustering(ufo_network).values())))
+        #     else:
+        #         average_clustering_coefficient_list.append(0.0)
             time_snapshots.append(time_snapshot)
+    # return ufo_network, k_avg_list, average_clustering_coefficient_list, time_snapshots
 
     print(f"\nFinal total size of network: {ufo_network.number_of_nodes()} nodes, {ufo_network.number_of_edges()} edges")
 
-    return ufo_network, k_avg_list, average_clustering_coefficient_list, time_snapshots
+    return ufo_network, time_snapshots
 
-def network_plotter(ufo_network):
-    fig = plt.figure(figsize=(8,6))
-    plt.style.use('seaborn-v0_8-whitegrid')
+def network_plotter(ufo_network, distance_threshold):
+    import matplotlib as mpl
+    fig, ax = plt.subplots(figsize=(8,6))
 
-    edges = ufo_network.edges()
+    # for nodes
+    edges = list(ufo_network.edges())
     weights = [ufo_network[u][v]['weight'] for u, v in edges]
-    pos = nx.spring_layout(ufo_network)
-    nx.draw_networkx_nodes(ufo_network, pos, node_size = 3, node_color='black')
+
+    # for weights
+    distances = np.array([ufo_network[u][v]['distance'] for u, v in edges])
+
+    # normalizing colours for colourbar
+    nodes = list(ufo_network.nodes())
+    times = np.array([ufo_network.nodes[n]['date_occured_minutes'] for n in nodes], dtype=float)
+    normalized_times = (times - np.min(times)) / (np.max(times) - np.min(times))
+
+    pos = nx.spring_layout(ufo_network, seed = 43)
+    drawn_nodes = nx.draw_networkx_nodes(ufo_network, pos, node_size = 5, node_color = normalized_times, cmap = plt.cm.Greens)
     for (i, j), alpha in zip(edges, weights):
-        nx.draw_networkx_edges(ufo_network, pos, [(i, j)], alpha=alpha, width=2)
+        nx.draw_networkx_edges(ufo_network, pos, [(i, j)], alpha = float(alpha), width=2, ax = ax)
+
+    sm = mpl.cm.ScalarMappable(
+        cmap=plt.cm.Greens,
+        norm=mpl.colors.Normalize(vmin=np.min(times), vmax=np.max(times)))
+    sm.set_array([])
+
+    cmap_edges = mpl.cm.Greys
+    sm_edges = mpl.cm.ScalarMappable(
+        cmap=cmap_edges, norm=mpl.colors.Normalize(vmin=0, vmax=1))
+    sm_edges.set_array([])
+
+    cbar = fig.colorbar(sm, ax=ax, fraction=0.035, pad=0.03)
+    cbar.set_label('ufo report time occurrence (minutes)')
+
+    cbar_edges = fig.colorbar(sm_edges, ax=ax, fraction=0.046, pad=0.03, aspect = 30, orientation='horizontal')
+    cbar_edges.set_label('normalized distance weight (km)')
     plt.title('fig 1. spring diagram of the temporal UFO network')
     plt.tight_layout()
     plt.savefig('spring_diagram.png', dpi = 400)
     plt.show()
 
-    fig = plt.figure(figsize=(10,10))
-    plt.style.use('seaborn-v0_8-whitegrid')
+
+def geographical_map_plotter(ufo_network, distance_threshold):
+    fig, ax = plt.subplots(figsize=(8,6))
     # resolution = 'c' means use crude resolution coastlines.
     m = Basemap(projection='cyl',llcrnrlat=-90,urcrnrlat=90,\
                 llcrnrlon=-180,urcrnrlon=180)
@@ -292,7 +319,6 @@ def network_plotter(ufo_network):
                         ufo_network.nodes[final_node]['lat_long_tuple'][0])
         plt.plot([xpt_i, xpt_f], [ypt_i, ypt_f], 'k-', alpha = ufo_network[init_node][final_node]["weight"])
 
-
     plt.title("fig 2. geographical map of the temporal UFO network")
     plt.ylim(23, 52)
     plt.xlim(-127, -67)
@@ -302,11 +328,14 @@ def network_plotter(ufo_network):
     plt.ylabel('latitude')
     plt.show()
 
-def network_characteristics(ufo_network, k_avg_list):
-    C = nx.connected_components(ufo_network)
-    print("The number of connected components is:", len(C))
+def network_characteristics(ufo_network):
 
-    # C = sorted(C, key=lambda c: len(c), reverse=True)
+    k_array = np.array([val for (node, val) in ufo_network.degree()])
+
+    C = nx.connected_components(ufo_network)
+    # print("The number of connected components is:", len(C))
+
+    C = sorted(C, key=lambda c: len(c), reverse=True)
     component_sizes = [len(c) for c in C]
 
     W = nx.adjacency_matrix(ufo_network).toarray()
@@ -320,7 +349,7 @@ def network_characteristics(ufo_network, k_avg_list):
     weighted_clustering_coefficient = np.zeros(n)
 
     for i in range(n):
-        if k_avg_list[i] <= 1 or s_array[i] == 0:
+        if k_array[i] <= 1 or s_array[i] == 0:
             weighted_clustering_coefficient[i] = 0
             continue
         
@@ -334,16 +363,13 @@ def network_characteristics(ufo_network, k_avg_list):
                 if j != h:
                     total += ((W[i,j] + W[i,h]) / 2) * A[j,h]
         
-        weighted_clustering_coefficient[i] = total / (s_array[i] * (k_avg_list[i] - 1))
+        weighted_clustering_coefficient[i] = total / (s_array[i] * (k_array[i] - 1))
 
     # weighted average nearest neighbor degree calculation
 
+    weighted_k_nn_array = (np.sum(A * W * k_array, axis=1)) / s_array
 
-    
-    print(f"The node with the highest weighted clustering coefficient is node {np.where(clustering_coefficient_list == np.max(clustering_coefficient_list))}, with a clustering coefficient of {max(clustering_coefficient_list)}")
-    print(f"The average weighted clustering coefficient is: {np.mean(weighted_clustering_coefficient)}")
-    print(f"The node with the highest clustering coefficient is node {clustering_coefficient_list.index(max(clustering_coefficient_list))}, with a clustering coefficient of {max(clustering_coefficient_list)}")
-    print(f"The average clustering coefficient is: {np.mean(clustering_coefficient_list)}")
+    return k_array, weighted_clustering_coefficient, weighted_k_nn_array
 
 def weight_distribution(ufo_network):
 # Get 20 logarithmically spaced bins between kmin and kmax
@@ -376,15 +402,29 @@ def weight_distribution(ufo_network):
 
 def main():
     distance_threshold = 100 # km
-    network_end = 1
-    time_step = 10000
-    ufo_network, k_avg_list, avg_clustering_list, times_list = network_creation_function("ufo_sightings_cleaned.csv", distance_threshold, network_end, time_step)
+    network_end = 1 # fraction of 1
+    time_step = 10000 # minutes
+    ufo_network, times_list = network_creation_function("PCS810 Code/project/ufo_sightings_cleaned.csv", distance_threshold, network_end, time_step)
     # plt.plot(times_list, k_avg_list)
     # plt.plot(times_list, avg_clustering_list)
     # plt.show()
-    network_plotter(ufo_network)
-    network_characteristics(ufo_network, k_avg_list)
+    # network_plotter(ufo_network, distance_threshold)
+    k_array, weighted_clustering_coefficient, weighted_k_nn_array = network_characteristics(ufo_network)
+    print(weighted_k_nn_array)
+    plt.plot(k_array, weighted_k_nn_array, 'k.')
+    plt.xlabel(f'k')
+    plt.ylabel('$k^w_{nn} (k)$')
+    plt.show()
+    # plt.legend()
+    # plt.show()
+    # plt.plot(times_list, avg_clustering_list)
+    # plt.show()
     # weight_distribution(ufo_network)
+
+    # print(f"The node with the highest weighted clustering coefficient is node {np.where(clustering_coefficient_list == np.max(clustering_coefficient_list))}, with a clustering coefficient of {max(clustering_coefficient_list)}")
+    # print(f"The average weighted clustering coefficient is: {np.mean(weighted_clustering_coefficient)}")
+    # print(f"The node with the highest clustering coefficient is node {clustering_coefficient_list.index(max(clustering_coefficient_list))}, with a clustering coefficient of {max(clustering_coefficient_list)}")
+    # print(f"The average clustering coefficient is: {np.mean(clustering_coefficient_list)}")
 if __name__ == "__main__":
     main()
 

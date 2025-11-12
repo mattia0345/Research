@@ -4,10 +4,12 @@ import random as rnd
 from scipy.stats import levy
 import random as random
 from scipy.linalg import lu_factor, lu_solve
+from scipy.stats import reciprocal
 
 def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates):
 
-    N = n + 1
+    # N = n + 1
+    N = 2**n
     ones_vec = np.ones(N - 1)
     # ones_vec = np.ones((1, N - 1))
     # ones_vec = np.ones((1, N-1), dtype = float) # shape (1, N-1)
@@ -64,23 +66,27 @@ def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rat
     # N_inv = lu_solve((lu, piv), np.eye(N_mat.shape[0]))
     # M_inv = np.linalg.pinv(M_mat)
     # N_inv = np.linalg.pinv(N_mat)
-    M_inv = np.linalg.inv(M_mat); N_inv = np.linalg.inv(N_mat)
+    # M_inv = np.linalg.inv(M_mat); N_inv = np.linalg.inv(N_mat)
 
-    L1 = G @ M_inv @ Q - Kp; L2 = H @ N_inv @ D - Pp
-    assert L1.shape == (N, N), f"L1 shape must be ({N}, {N})"
-    assert L2.shape == (N, N), f"L2 shape must be ({N}, {N})"
-    W1 = M_inv @ Q; W2 = N_inv @ D
-    assert W1.shape == (N-1, N), f"W1 shape must be ({N-1}, {N})"
-    assert W2.shape == (N-1, N), f"W2 shape must be ({N-1}, {N})"
+    # L1 = G @ M_inv @ Q - Kp; L2 = H @ N_inv @ D - Pp
+    # assert L1.shape == (N, N), f"L1 shape must be ({N}, {N})"
+    # assert L2.shape == (N, N), f"L2 shape must be ({N}, {N})"
+    # W1 = M_inv @ Q; W2 = N_inv @ D
+    # assert W1.shape == (N-1, N), f"W1 shape must be ({N-1}, {N})"
+    # assert W2.shape == (N-1, N), f"W2 shape must be ({N-1}, {N})"
 
-    return Kp, Pp, G, H, Q, M_mat, D, N_mat, L1, L2, W1, W2
+    # return Kp, Pp, G, H, Q, M_mat, D, N_mat, L1, L2, W1, W2
+
+    return Kp, Pp, G, H, Q, M_mat, D, N_mat
 
 def MATTIA_FULL(t, state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
 
     # including conservation laws
     # state_array = [a0, a1, b0, b1, c1, c2]
 
-    N = n + 1
+    # N = n + 1
+    N = 2**n
+
     assert len(state_array) == 3*N - 3
     a_red = state_array[0: N - 1]
     b = state_array[N - 1: 2*N - 2]
@@ -94,12 +100,19 @@ def MATTIA_FULL(t, state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, 
     b_dot = x * (Q @ a) - (M_mat @ b)
     c_dot = y * (D @ a) - (N_mat @ c)
 
-    x_dot = -1*np.sum(b_dot)
-    y_dot = -1*np.sum(c_dot)
+    # x_dot = -1*np.sum(b_dot)
+    # y_dot = -1*np.sum(c_dot)
 
     a_dot_red = a_dot[0: N-1]
 
+    # zero_threshold = 1e-15
+    # # below_mask = a_red < zero_threshold
+    # a_dot_red = np.where(a_red < zero_threshold, np.maximum(a_dot_red, 0), a_dot_red)
+    # b_dot = np.where(b < zero_threshold, np.maximum(b_dot, 0), b_dot)
+    # c_dot = np.where(c < zero_threshold, np.maximum(c_dot, 0), c_dot)
+
     return np.concatenate([a_dot_red, b_dot, c_dot])
+
 
 class all_parameter_generation:
     """
@@ -113,7 +126,7 @@ class all_parameter_generation:
     """
     def __init__(self, n: int, reaction_types: str, distribution: str, distribution_paramaters: List[float], verbose: bool = False):
         self.n = n
-        self.N = n + 1
+        self.N = 2**n
         self.distribution = distribution
         self.params = distribution_paramaters
         self.reaction_types = reaction_types
@@ -134,20 +147,23 @@ class all_parameter_generation:
             valid_X_reactions: list of [state_i_str, state_j_str, i, j, "E"]
             valid_Y_reactions: list of [state_i_str, state_j_str, i, j, "F"]
         """
-        all_states = [self.padded_binary(i, self.n) for i in range(self.N)]
+        num_states = self.N
+        all_states = [self.padded_binary(i, self.n) for i in range(num_states)]
 
         valid_difference_vectors: Set[Tuple[int, ...]] = set()
         valid_X_reactions: List[List[Any]] = []
         valid_Y_reactions: List[List[Any]] = []
 
-        for i in range(self.N):
+        for i in range(num_states):
             arr_i = self.binary_string_to_array(all_states[i])
-            for j in range(self.N):
+            # print(all_states[i])
+            for j in range(num_states):
                 if i == j:
                     continue
+
                 arr_j = self.binary_string_to_array(all_states[j])
+
                 diff = arr_j - arr_i
-                # if self.reaction_types == "distributive":
                     
                 hamming_weight = np.sum(np.abs(diff))
 
@@ -170,18 +186,18 @@ class all_parameter_generation:
                                             Dict[int, List[int]], Dict[int, List[int]],
                                             Dict[int, List[int]], Dict[int, List[int]]]:
         
-        # valid_X_reactions, valid_Y_reactions = self.calculate_valid_transitions()
+        valid_X_reactions, valid_Y_reactions = self.calculate_valid_transitions()
 
         shape, scale = self.params
 
-        # alpha_matrix = np.zeros((self.N, self.N))
-        alpha_array = np.array([self.rng.gamma(shape, scale) for i in range(self.n)])
-        alpha_matrix = np.diag(alpha_array, 1)
+        alpha_matrix = np.zeros((self.N, self.N))
+        # alpha_array = np.array([self.rng.gamma(shape, scale) for i in range(self.n)])
+        # alpha_matrix = np.diag(alpha_array, 1)
         
         # alpha_matrix = np.diag([self.rng.gamma(shape, scale)]*(min(self.N, self.N - 1)), 1)[:self.N, :self.N]
-        # for _, _, i, j, _ in valid_X_reactions:
+        for _, _, i, j, _ in valid_X_reactions:
 
-        #     alpha_matrix[i][j] = self.rng.gamma(shape, scale)
+            alpha_matrix[i][j] = self.rng.gamma(shape, scale)
 
         assert alpha_matrix.shape == (self.N, self.N), f"alpha_matrix shape must be ({self.N}, {self.N})"
 
@@ -192,17 +208,18 @@ class all_parameter_generation:
                                             Dict[int, List[int]], Dict[int, List[int]],
                                             Dict[int, List[int]], Dict[int, List[int]]]:
         
-        # valid_X_reactions, valid_Y_reactions = self.calculate_valid_transitions()
+        valid_X_reactions, valid_Y_reactions = self.calculate_valid_transitions()
 
         shape, scale = self.params
-        beta_array = np.array([self.rng.gamma(shape, scale) for i in range(self.n)])
-        
-        beta_matrix = np.diag(beta_array, -1)
-        # beta_matrix = np.zeros((self.N, self.N))
-        
-        # for _, _, i, j, _ in valid_Y_reactions:
 
-        #     beta_matrix[i][j] = self.rng.gamma(shape, scale)
+        # beta_array = np.array([self.rng.gamma(shape, scale) for i in range(self.n)])
+        # beta_matrix = np.diag(beta_array, -1)
+
+        beta_matrix = np.zeros((self.N, self.N))
+        
+        for _, _, i, j, _ in valid_Y_reactions:
+
+            beta_matrix[i][j] = self.rng.gamma(shape, scale)
 
         # beta_matrix = np.diag([self.rng.gamma(shape, scale)]*(min(self.N-1, self.N)), -1)[:self.N, :self.N]
         assert beta_matrix.shape == (self.N, self.N), f"alpha_matrix shape must be ({self.N}, {self.N})"
@@ -249,7 +266,8 @@ class all_parameter_generation:
 
 
 def guess_generator(n, a_tot, x_tot, y_tot):
-    N = n + 1
+    # N = n + 1
+    N = 2**n
 
     bx_splits = sorted([random.uniform(0, x_tot) for _ in range(N - 1)])
     bx_values = [bx_splits[0]] + [bx_splits[i] - bx_splits[i-1] for i in range(1, N-1)] + [x_tot - bx_splits[-1]]
@@ -294,6 +312,28 @@ def matrix_clip(matrix, rate_min, rate_max):
     clipped[mask] = np.clip(clipped[mask], rate_min, rate_max)
     return clipped
 
+def matrix_sample_reciprocal(matrix, rate_min, rate_max):
+
+    sampled_matrix = matrix.copy()
+    mask = sampled_matrix != 0
+    num_samples = np.sum(mask)
+
+    new_samples = reciprocal.rvs(
+        a=rate_min, 
+        b=rate_max, 
+        size=num_samples
+    )
+    sampled_matrix[mask] = new_samples
+    return sampled_matrix
+
+def matrix_normalize(matrix: np.ndarray) -> np.ndarray:
+    normalized = matrix.copy()
+    non_zero_mask = normalized != 0
+    non_zero_elements = normalized[non_zero_mask]
+    mean_non_zero = non_zero_elements.mean()
+    normalized[non_zero_mask] = normalized[non_zero_mask] / mean_non_zero
+    return normalized
+
 def pertubation_array_creation(ic_array, pertubation_parameter):
     # find the 2 indices with the largest elements, create a pertubation array
     largest_index = np.argsort(ic_array)[-2:][-2]
@@ -305,6 +345,11 @@ def pertubation_array_creation(ic_array, pertubation_parameter):
 
 def main():
     n = 2
+    # n = 14
+    # new_shape_parameters = (1e6, 1e6)
+    # gen_rates = all_parameter_generation(n, "distributive", "gamma", new_shape_parameters, verbose = False)
+    # alpha_matrix = gen_rates.alpha_parameter_generation()
+    # print(alpha_matrix)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,295 @@
+# import numpy as np
+# from typing import List, Tuple, Dict, Any, Set
+# import matplotlib.pyplot as plt
+# from scipy.integrate import solve_ivp
+# import pickle
+# import random
+# from PHOS_FUNCTIONS import MATRIX_FINDER, MATTIA_FULL, guess_generator, matrix_normalize
+
+# def sim_full_jacobian(t, state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
+#     N = 2**n
+#     assert len(state_array) == 3*N - 3
+    
+#     a_red = state_array[0: N - 1]
+#     b = state_array[N - 1: 2*N - 2]
+#     c = state_array[2*N - 2: 3*N - 3]
+
+#     a = np.concatenate([a_red, [a_tot - np.sum(a_red) - np.sum(b) - np.sum(c)]])
+#     x = x_tot - np.sum(b)
+#     y = y_tot - np.sum(c)
+
+#     # We need to compute the Jacobian of:
+#     # a_dot_red = (G @ b + H @ c - x * Kp @ a - y * Pp @ a)[0:N-1]
+#     # b_dot = x * Q @ a - M_mat @ b
+#     # c_dot = y * D @ a - N_mat @ c
+    
+#     # First, let's establish how a, x, y depend on the state variables:
+#     # a[i] = a_red[i] for i < N-1
+#     # a[N-1] = a_tot - sum(a_red) - sum(b) - sum(c)
+#     # x = x_tot - sum(b)
+#     # y = y_tot - sum(c)
+    
+#     # Create derivative matrices for a, x, y w.r.t. state_array
+#     # da/d(state_array): shape (N, 3N-3)
+#     da_dstate = np.zeros((N, 3*N - 3))
+#     # First N-1 rows: da[i]/da_red[j] = delta[i,j]
+#     da_dstate[0:N-1, 0:N-1] = np.eye(N-1)
+#     # Last row: da[N-1]/da_red[j] = -1, da[N-1]/db[j] = -1, da[N-1]/dc[j] = -1
+#     da_dstate[N-1, :] = -1
+    
+#     # dx/d(state_array): shape (1, 3N-3)
+#     dx_dstate = np.zeros((1, 3*N - 3))
+#     dx_dstate[0, N-1:2*N-2] = -1  # dx/db[j] = -1
+    
+#     # dy/d(state_array): shape (1, 3N-3)
+#     dy_dstate = np.zeros((1, 3*N - 3))
+#     dy_dstate[0, 2*N-2:3*N-3] = -1  # dy/dc[j] = -1
+    
+#     # Now compute the Jacobian for each output block
+    
+#     # === Block 1: d(a_dot_red)/d(state_array) ===
+#     # a_dot = G @ b + H @ c - x * Kp @ a - y * Pp @ a
+#     # We need first N-1 rows
+    
+#     # Term 1: d(G @ b)/d(state_array)
+#     # G @ b depends only on b
+#     term1 = np.zeros((N, 3*N - 3))
+#     term1[:, N-1:2*N-2] = G  # d(G @ b)/db = G
+    
+#     # Term 2: d(H @ c)/d(state_array)
+#     term2 = np.zeros((N, 3*N - 3))
+#     term2[:, 2*N-2:3*N-3] = H  # d(H @ c)/dc = H
+    
+#     # Term 3: d(-x * Kp @ a)/d(state_array)
+#     # = -x * Kp @ (da/dstate) - (dx/dstate) * (Kp @ a)^T
+#     Kp_a = Kp @ a  # shape (N,)
+#     term3 = -x * Kp @ da_dstate - np.outer(Kp_a, dx_dstate[0, :])
+    
+#     # Term 4: d(-y * Pp @ a)/d(state_array)
+#     # = -y * Pp @ (da/dstate) - (dy/dstate) * (Pp @ a)^T
+#     Pp_a = Pp @ a  # shape (N,)
+#     term4 = -y * Pp @ da_dstate - np.outer(Pp_a, dy_dstate[0, :])
+    
+#     # Combine and take first N-1 rows
+#     J_a_dot_red = (term1 + term2 + term3 + term4)[0:N-1, :]
+    
+#     # === Block 2: d(b_dot)/d(state_array) ===
+#     # b_dot = x * Q @ a - M_mat @ b
+    
+#     # Term 1: d(x * Q @ a)/d(state_array)
+#     # = x * Q @ (da/dstate) + (dx/dstate) * (Q @ a)^T
+#     Q_a = Q @ a  # shape (N-1,)
+#     term1_b = x * Q @ da_dstate + np.outer(Q_a, dx_dstate[0, :])
+    
+#     # Term 2: d(-M_mat @ b)/d(state_array)
+#     term2_b = np.zeros((N-1, 3*N - 3))
+#     term2_b[:, N-1:2*N-2] = -M_mat
+    
+#     J_b_dot = term1_b + term2_b
+    
+#     # === Block 3: d(c_dot)/d(state_array) ===
+#     # c_dot = y * D @ a - N_mat @ c
+    
+#     # Term 1: d(y * D @ a)/d(state_array)
+#     # = y * D @ (da/dstate) + (dy/dstate) * (D @ a)^T
+#     D_a = D @ a  # shape (N-1,)
+#     term1_c = y * D @ da_dstate + np.outer(D_a, dy_dstate[0, :])
+    
+#     # Term 2: d(-N_mat @ c)/d(state_array)
+#     term2_c = np.zeros((N-1, 3*N - 3))
+#     term2_c[:, 2*N-2:3*N-3] = -N_mat
+    
+#     J_c_dot = term1_c + term2_c
+    
+#     # Combine all blocks
+#     J = np.vstack([J_a_dot_red, J_b_dot, J_c_dot])
+    
+#     return J
+
+# def stable_event(t, state_array, *args):
+#     n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat = args
+
+#     state_dot = MATTIA_FULL(t, state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
+
+#     eps = 1e-10          
+#     threshold = 1e-10 
+
+#     # eps = 1e-12           
+#     # threshold = 1e-12 
+
+#     state_norm = np.linalg.norm(state_array)
+#     dot_norm = np.linalg.norm(state_dot)
+
+#     denom = max(state_norm, eps)
+#     rel_change = dot_norm / denom
+
+#     value = rel_change - threshold
+
+#     return value
+
+# stable_event.terminal = True
+# stable_event.direction = 0
+
+# def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_t):
+
+#     n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates, a_tot, x_tot, y_tot = parameters_tuple
+#     N = 2**n
+
+#     assert np.all(initial_states_array >= 0)
+
+#     #### SCALING TIME
+#     initial_t = 0
+#     t_span = (initial_t, final_t)
+
+#     ###### OBTAINING ALL MATRICES
+#     Kp, Pp, G, H, Q, M_mat, D, N_mat = MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates)
+#     cmap = plt.get_cmap('inferno')
+#     # def color_for_species(idx):
+#     #     return cmap(idx / (3 * N - 3))  # smooth gradient of distinct colors
+    
+#     abstol = 1e-20
+#     reltol = 1e-5
+
+#     mattia_full_parameter_tuple = (n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
+
+#     method = 'LSODA'
+#     sol = solve_ivp(MATTIA_FULL, t_span = t_span, y0=np.asarray(initial_states_array, dtype=float),
+#                 jac = sim_full_jacobian, events = stable_event, args = mattia_full_parameter_tuple, method = method, atol = abstol, rtol = reltol)
+#     print(sol.message)
+#     a_solution_stack = np.stack([sol.y[i] for i in range(0, N - 1)])
+#     b_solution_stack = np.stack([sol.y[i] for i in range(N-1, 2*N - 2)]) 
+#     c_solution_stack = np.stack([sol.y[i] for i in range(2*N - 2, 3*N - 3)])
+#     a_N_array = a_tot - np.sum(a_solution_stack, axis=0) - np.sum(b_solution_stack, axis = 0) - np.sum(c_solution_stack, axis=0)
+
+#     plt.figure(figsize = (8, 6))
+#     plt.style.use('seaborn-v0_8-whitegrid')
+#     for i in range(a_solution_stack.shape[0]):
+#         # color = color_for_species(i)
+#         plt.plot(sol.t, a_solution_stack[i], label = f"[$A_{i}]$", lw=4, alpha = 0.4)
+#         # print(f"final A_{i} = {a_solution_stack[i][-1]}")
+#         plt.title(f"phosphorylation dynamics for n = {n}")
+
+#     # color_N = color_for_species(N-1)
+#     plt.plot(sol.t, a_N_array, label=f"$[A_{{{N-1}}}]$", lw=4, alpha=0.9)
+#         # b_solution_stack = np.stack([sol.y[i] for i in range(N, 2*N - 1)]) 
+#         # c_solution_stack = np.stack([sol.y[i] for i in range(2*N - 1, 3*N - 2)]) 
+#         # x_solution = sol.y[-2]
+#         # y_solution = sol.y[-1]
+#         # for i in range(b_solution_stack.shape[0]):
+#         #     color = color_for_species(i + a_solution_stack.shape[0])
+#         #     plt.plot(sol.t, b_solution_stack[i], color=color, label = f"$B_{i}$", lw=1.5, linestyle='-', alpha = 0.75)
+#         #     print(f"final B_{i} = {b_solution_stack[i][-1]}")
+
+#         # for i in range(c_solution_stack.shape[0]):
+#         #     color = color_for_species(i + a_solution_stack.shape[0] + b_solution_stack.shape[0] - 1)
+#         #     plt.plot(sol.t, c_solution_stack[i], color=color, label=f"$C_{i+1}$", lw=1, linestyle='--', alpha = 1)
+#         #     print(f"final C_{i+1} = {c_solution_stack[i][-1]}")
+
+#         # print(f"final X = {x_solution[-1]}")
+#         # print(f"final Y = {y_solution[-1]}")
+#         # print(a_solution_stack)
+
+#     # plt.ylim(0.0001, 1)
+#     # plt.yscale('log')
+#     plt.ylabel("concentration")
+#     plt.xlabel("time")
+#     plt.minorticks_on()
+#     plt.tight_layout()
+#     if sol.status == 1:
+#         plt.xlim(t_span[0] - 0.1, sol.t_events[0][0] + 0.1)
+#     else:
+#         plt.xlim(t_span[0] - 0.1, t_span[1] + 0.1)
+#     # plt.xlim(60000, 70000)
+#     plt.ylim(-0.02, 1.02)
+
+#     plt.legend(frameon=False)
+#     plt.show()
+    
+# def plotter(index, final_t, file_name):
+#     n = int(file_name[-5:-4])
+#     N = 2**n
+
+#     with open(file_name, "rb") as f:
+#         multistable_results = pickle.load(f)
+#     for i in range(len(multistable_results)):
+#         print(f"index {i}:")
+#         print(f"stable states:")
+#         for j in range(len(multistable_results[i]['stable_states'])):
+#             print(f"{multistable_results[i]['stable_states'][j]}")
+#         print(f"unstable states:")
+#         for k in range(len(multistable_results[i]['unstable_states'])):
+#             print(f"{multistable_results[i]['unstable_states'][k]}")
+#         print()
+#     a_stable_states = multistable_results[index]["stable_states"]
+#     a_tot_parameter = multistable_results[index]["total_concentration_values"][0]
+#     x_tot_parameter = multistable_results[index]["total_concentration_values"][1]
+#     y_tot_parameter = multistable_results[index]["total_concentration_values"][2]
+#     alpha_matrix = multistable_results[index]["alpha_matrix"]
+#     beta_matrix = multistable_results[index]["beta_matrix"]
+#     k_positive_rates = multistable_results[index]["k_positive_rates"]
+#     k_negative_rates = multistable_results[index]["k_negative_rates"]
+#     p_positive_rates = multistable_results[index]["p_positive_rates"]
+#     p_negative_rates = multistable_results[index]["p_negative_rates"]
+#     eigenvalues = multistable_results[index]["eigenvalues"]
+
+#     eigen_value_tol = 1e-8
+#     for e in eigenvalues:
+#         if np.max(e) > eigen_value_tol:
+#             print(f"UNSTABLE EIGENVALUES: {e}")
+#         elif np.all(e < -eigen_value_tol):
+#             print(f"STABLE EIGENVALUES: {e}")
+#     # print(f"k+: {k_positive_rates}")
+#     # print(f"k-: {k_negative_rates}")
+#     # print(f"p+: {p_positive_rates}")
+#     # print(f"p-: {p_negative_rates}")
+#     # print(f"alpha: {alpha_matrix}")
+#     # print(f"beta: {beta_matrix}")
+#     # NORMALIZING
+#     # sum_rates = np.sum(alpha_matrix) + np.sum(beta_matrix) + np.sum(k_positive_rates) + \
+#     #      np.sum(k_negative_rates) + np.sum(p_positive_rates) + np.sum(p_negative_rates)
+#     # mean_all_rates = sum_rates / 20
+#     # alpha_matrix = alpha_matrix / mean_all_rates
+#     # beta_matrix = beta_matrix / mean_all_rates
+#     # k_positive_rates = k_positive_rates / mean_all_rates
+#     # k_negative_rates = k_negative_rates / mean_all_rates
+#     # p_positive_rates = p_positive_rates / mean_all_rates
+#     # p_negative_rates = p_negative_rates / mean_all_rates
+
+#     attempt_total_num = 8
+#     initial_conditions_list = []
+#     # guesses.append(1e-14*np.ones(3*N - 3))
+#     # guesses.append(np.concatenate([np.array([1-1e-14]), np.zeros(3*N-4)]))
+#     initial_conditions_list.append(np.zeros(3*N - 3))
+#     initial_conditions_list.append(1e-5*np.ones(3*N - 3))
+#     initial_conditions_list.append(np.concatenate([np.array([1]), np.zeros(3*N-4)]))
+
+#     for i in range(8):
+#         t = np.random.rand(N)
+#         t /= t.sum()
+#         t = t[:-1]
+#         initial_conditions_list.append(np.concatenate([t, np.zeros(2*N-2)]))
+
+#     for i in range(attempt_total_num):
+#         initial_conditions_list.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
+#         # initial_conditions_list.append(guess_generator(n, a_tot, x_tot, y_tot))
+#         initial_conditions_list.append(guess_generator(n, a_tot_parameter, x_tot_parameter, y_tot_parameter))
+
+#     for guess in initial_conditions_list:
+#         # initial_states_array = np.concatenate([np.array([random.random()]), np.zeros(3*N-4)])
+#         parameters_tuple = (n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates, a_tot_parameter, x_tot_parameter, y_tot_parameter)
+#         phosphorylation_system_solver(parameters_tuple, np.array(guess), final_t)
+
+# def main():
+#     file_name = "multistability_parameters_4000_4.pkl"
+
+#     index = 4
+
+#     final_t = 10000000
+#     plotter(index, final_t, file_name)
+
+# if __name__ == "__main__":
+#     main()
+
 import numpy as np
 from typing import List, Tuple, Dict, Any, Set
 import matplotlib.pyplot as plt
@@ -5,6 +297,127 @@ from scipy.integrate import solve_ivp
 import pickle
 import random
 from PHOS_FUNCTIONS import MATRIX_FINDER, MATTIA_FULL, guess_generator, matrix_normalize
+
+def sim_full_jacobian(t, state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
+    N = 2**n
+    assert len(state_array) == 3*N - 3
+    
+    a_red = state_array[0: N - 1]
+    b = state_array[N - 1: 2*N - 2]
+    c = state_array[2*N - 2: 3*N - 3]
+
+    a = np.concatenate([a_red, [a_tot - np.sum(a_red) - np.sum(b) - np.sum(c)]])
+    x = x_tot - np.sum(b)
+    y = y_tot - np.sum(c)
+
+    # We need to compute the Jacobian of:
+    # a_dot_red = (G @ b + H @ c - x * Kp @ a - y * Pp @ a)[0:N-1]
+    # b_dot = x * Q @ a - M_mat @ b
+    # c_dot = y * D @ a - N_mat @ c
+    
+    # First, let's establish how a, x, y depend on the state variables:
+    # a[i] = a_red[i] for i < N-1
+    # a[N-1] = a_tot - sum(a_red) - sum(b) - sum(c)
+    # x = x_tot - sum(b)
+    # y = y_tot - sum(c)
+    
+    # Create derivative matrices for a, x, y w.r.t. state_array
+    # da/d(state_array): shape (N, 3N-3)
+    da_dstate = np.zeros((N, 3*N - 3))
+    # First N-1 rows: da[i]/da_red[j] = delta[i,j]
+    da_dstate[0:N-1, 0:N-1] = np.eye(N-1)
+    # Last row: da[N-1]/da_red[j] = -1, da[N-1]/db[j] = -1, da[N-1]/dc[j] = -1
+    da_dstate[N-1, :] = -1
+    
+    # dx/d(state_array): shape (1, 3N-3)
+    dx_dstate = np.zeros((1, 3*N - 3))
+    dx_dstate[0, N-1:2*N-2] = -1  # dx/db[j] = -1
+    
+    # dy/d(state_array): shape (1, 3N-3)
+    dy_dstate = np.zeros((1, 3*N - 3))
+    dy_dstate[0, 2*N-2:3*N-3] = -1  # dy/dc[j] = -1
+    
+    # Now compute the Jacobian for each output block
+    
+    # === Block 1: d(a_dot_red)/d(state_array) ===
+    # a_dot = G @ b + H @ c - x * Kp @ a - y * Pp @ a
+    # We need first N-1 rows
+    
+    # Term 1: d(G @ b)/d(state_array)
+    # G @ b depends only on b
+    term1 = np.zeros((N, 3*N - 3))
+    term1[:, N-1:2*N-2] = G  # d(G @ b)/db = G
+    
+    # Term 2: d(H @ c)/d(state_array)
+    term2 = np.zeros((N, 3*N - 3))
+    term2[:, 2*N-2:3*N-3] = H  # d(H @ c)/dc = H
+    
+    # Term 3: d(-x * Kp @ a)/d(state_array)
+    # = -x * Kp @ (da/dstate) - (dx/dstate) * (Kp @ a)^T
+    Kp_a = Kp @ a  # shape (N,)
+    term3 = -x * Kp @ da_dstate - np.outer(Kp_a, dx_dstate[0, :])
+    
+    # Term 4: d(-y * Pp @ a)/d(state_array)
+    # = -y * Pp @ (da/dstate) - (dy/dstate) * (Pp @ a)^T
+    Pp_a = Pp @ a  # shape (N,)
+    term4 = -y * Pp @ da_dstate - np.outer(Pp_a, dy_dstate[0, :])
+    
+    # Combine and take first N-1 rows
+    J_a_dot_red = (term1 + term2 + term3 + term4)[0:N-1, :]
+    
+    # === Block 2: d(b_dot)/d(state_array) ===
+    # b_dot = x * Q @ a - M_mat @ b
+    
+    # Term 1: d(x * Q @ a)/d(state_array)
+    # = x * Q @ (da/dstate) + (dx/dstate) * (Q @ a)^T
+    Q_a = Q @ a  # shape (N-1,)
+    term1_b = x * Q @ da_dstate + np.outer(Q_a, dx_dstate[0, :])
+    
+    # Term 2: d(-M_mat @ b)/d(state_array)
+    term2_b = np.zeros((N-1, 3*N - 3))
+    term2_b[:, N-1:2*N-2] = -M_mat
+    
+    J_b_dot = term1_b + term2_b
+    
+    # === Block 3: d(c_dot)/d(state_array) ===
+    # c_dot = y * D @ a - N_mat @ c
+    
+    # Term 1: d(y * D @ a)/d(state_array)
+    # = y * D @ (da/dstate) + (dy/dstate) * (D @ a)^T
+    D_a = D @ a  # shape (N-1,)
+    term1_c = y * D @ da_dstate + np.outer(D_a, dy_dstate[0, :])
+    
+    # Term 2: d(-N_mat @ c)/d(state_array)
+    term2_c = np.zeros((N-1, 3*N - 3))
+    term2_c[:, 2*N-2:3*N-3] = -N_mat
+    
+    J_c_dot = term1_c + term2_c
+    
+    # Combine all blocks
+    J = np.vstack([J_a_dot_red, J_b_dot, J_c_dot])
+    
+    return J
+
+def stable_event(t, state_array, *args):
+    n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat = args
+
+    state_dot = MATTIA_FULL(t, state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
+
+    eps = 1e-10          
+    threshold = 1e-10 
+
+    state_norm = np.linalg.norm(state_array)
+    dot_norm = np.linalg.norm(state_dot)
+
+    denom = max(state_norm, eps)
+    rel_change = dot_norm / denom
+
+    value = rel_change - threshold
+
+    return value
+
+stable_event.terminal = True
+stable_event.direction = 0
 
 def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_t):
 
@@ -19,9 +432,6 @@ def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_
 
     ###### OBTAINING ALL MATRICES
     Kp, Pp, G, H, Q, M_mat, D, N_mat = MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates)
-    cmap = plt.get_cmap('Accent')
-    def color_for_species(idx):
-        return cmap(idx / (3 * N - 3))  # smooth gradient of distinct colors
     
     abstol = 1e-20
     reltol = 1e-5
@@ -30,51 +440,14 @@ def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_
 
     method = 'LSODA'
     sol = solve_ivp(MATTIA_FULL, t_span = t_span, y0=np.asarray(initial_states_array, dtype=float),
-                args = mattia_full_parameter_tuple, method = method, atol = abstol, rtol = reltol)
+                jac = sim_full_jacobian, args = mattia_full_parameter_tuple, method = method, atol = abstol, rtol = reltol)
+    print(sol.message)
     
-    a_solution_stack = np.stack([sol.y[i] for i in range(0, N - 1)])
-    b_solution_stack = np.stack([sol.y[i] for i in range(N-1, 2*N - 2)]) 
-    c_solution_stack = np.stack([sol.y[i] for i in range(2*N - 2, 3*N - 3)])
-    a_N_array = a_tot - np.sum(a_solution_stack, axis=0) - np.sum(b_solution_stack, axis = 0) - np.sum(c_solution_stack, axis=0)
-
-    plt.figure(figsize = (8, 6))
-    plt.style.use('seaborn-v0_8-whitegrid')
-    for i in range(a_solution_stack.shape[0]):
-        color = color_for_species(i)
-        plt.plot(sol.t, a_solution_stack[i], color=color, label = f"[$A_{i}]$", lw=4, alpha = 0.9)
-        # print(f"final A_{i} = {a_solution_stack[i][-1]}")
-        plt.title(f"phosphorylation dynamics for n = {n}")
-
-    color_N = color_for_species(N-1)
-    plt.plot(sol.t, a_N_array, color=color_N, label=f"$[A_{{{N-1}}}]$", lw=4, alpha=0.9)
-        # b_solution_stack = np.stack([sol.y[i] for i in range(N, 2*N - 1)]) 
-        # c_solution_stack = np.stack([sol.y[i] for i in range(2*N - 1, 3*N - 2)]) 
-        # x_solution = sol.y[-2]
-        # y_solution = sol.y[-1]
-        # for i in range(b_solution_stack.shape[0]):
-        #     color = color_for_species(i + a_solution_stack.shape[0])
-        #     plt.plot(sol.t, b_solution_stack[i], color=color, label = f"$B_{i}$", lw=1.5, linestyle='-', alpha = 0.75)
-        #     print(f"final B_{i} = {b_solution_stack[i][-1]}")
-
-        # for i in range(c_solution_stack.shape[0]):
-        #     color = color_for_species(i + a_solution_stack.shape[0] + b_solution_stack.shape[0] - 1)
-        #     plt.plot(sol.t, c_solution_stack[i], color=color, label=f"$C_{i+1}$", lw=1, linestyle='--', alpha = 1)
-        #     print(f"final C_{i+1} = {c_solution_stack[i][-1]}")
-
-        # print(f"final X = {x_solution[-1]}")
-        # print(f"final Y = {y_solution[-1]}")
-        # print(a_solution_stack)
-
-
-    plt.ylabel("concentration")
-    plt.xlabel("time")
-    plt.minorticks_on()
-    plt.tight_layout()
-    plt.xlim(t_span[0] - 0.1, t_span[1] + 0.1)
-    plt.ylim(-0.05, 1.1)
-    plt.legend(frameon=False)
-    plt.show()
+    # Return solution for A_0
+    a_0_solution = sol.y[0]
     
+    return sol.t, a_0_solution
+
 def plotter(index, final_t, file_name):
     n = int(file_name[-5:-4])
     N = 2**n
@@ -82,13 +455,14 @@ def plotter(index, final_t, file_name):
     with open(file_name, "rb") as f:
         multistable_results = pickle.load(f)
     for i in range(len(multistable_results)):
-        print(f"Index {i}: # of stable states:")
+        print(f"index {i}:")
+        print(f"stable states:")
         for j in range(len(multistable_results[i]['stable_states'])):
             print(f"{multistable_results[i]['stable_states'][j]}")
-    # for i in multistable_results:
-    #     # print(f"Index {i}: # of stable states:")
-    #     print(i)
-        # print(f"{multistable_results[i]['stable_states']}")
+        print(f"unstable states:")
+        for k in range(len(multistable_results[i]['unstable_states'])):
+            print(f"{multistable_results[i]['unstable_states'][k]}")
+        print()
     a_stable_states = multistable_results[index]["stable_states"]
     a_tot_parameter = multistable_results[index]["total_concentration_values"][0]
     x_tot_parameter = multistable_results[index]["total_concentration_values"][1]
@@ -99,49 +473,63 @@ def plotter(index, final_t, file_name):
     k_negative_rates = multistable_results[index]["k_negative_rates"]
     p_positive_rates = multistable_results[index]["p_positive_rates"]
     p_negative_rates = multistable_results[index]["p_negative_rates"]
+    eigenvalues = multistable_results[index]["eigenvalues"]
 
+    eigen_value_tol = 1e-8
+    for e in eigenvalues:
+        if np.max(e) > eigen_value_tol:
+            print(f"UNSTABLE EIGENVALUES: {e}")
+        elif np.all(e < -eigen_value_tol):
+            print(f"STABLE EIGENVALUES: {e}")
 
-    # NORMALIZING
-    # sum_rates = np.sum(alpha_matrix) + np.sum(beta_matrix) + np.sum(k_positive_rates) + \
-    #      np.sum(k_negative_rates) + np.sum(p_positive_rates) + np.sum(p_negative_rates)
-    # mean_all_rates = sum_rates / 20
-    # alpha_matrix = alpha_matrix / mean_all_rates
-    # beta_matrix = beta_matrix / mean_all_rates
-    # k_positive_rates = k_positive_rates / mean_all_rates
-    # k_negative_rates = k_negative_rates / mean_all_rates
-    # p_positive_rates = p_positive_rates / mean_all_rates
-    # p_negative_rates = p_negative_rates / mean_all_rates
-
-    attempt_total_num = 8
+    attempt_total_num = 30
     initial_conditions_list = []
-    # guesses.append(1e-14*np.ones(3*N - 3))
-    # guesses.append(np.concatenate([np.array([1-1e-14]), np.zeros(3*N-4)]))
-    initial_conditions_list.append(np.zeros(3*N - 3))
-    initial_conditions_list.append(1e-5*np.ones(3*N - 3))
-    initial_conditions_list.append(np.concatenate([np.array([1]), np.zeros(3*N-4)]))
+    # initial_conditions_list.append(np.zeros(3*N - 3))
+    # initial_conditions_list.append(1e-5*np.ones(3*N - 3))
+    # initial_conditions_list.append(np.concatenate([np.array([1]), np.zeros(3*N-4)]))
 
-    for i in range(5):
-        t = np.random.rand(N)
-        t /= t.sum()
-        t = t[:-1]
-        initial_conditions_list.append(np.concatenate([t, np.zeros(2*N-2)]))
+    # for i in range(8):
+    #     t = np.random.rand(N)
+    #     t /= t.sum()
+    #     t = t[:-1]
+    #     initial_conditions_list.append(np.concatenate([t, np.zeros(2*N-2)]))
 
-    for i in range(attempt_total_num):
-        initial_conditions_list.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
-        # initial_conditions_list.append(guess_generator(n, a_tot, x_tot, y_tot))
-        initial_conditions_list.append(guess_generator(n, a_tot_parameter, x_tot_parameter, y_tot_parameter))
+    a_0_ic = np.linspace(1e-5, a_tot_parameter - 1e-5, attempt_total_num)
+    for i in a_0_ic:
+        initial_conditions_list.append(np.concatenate([np.array([i]), np.zeros(3*N-4)]))
 
-    for guess in initial_conditions_list:
-        # initial_states_array = np.concatenate([np.array([random.random()]), np.zeros(3*N-4)])
+    # Create single figure
+    plt.figure(figsize = (8, 6))
+    plt.style.use('seaborn-v0_8-whitegrid')
+    
+    cmap = plt.get_cmap('plasma')
+    
+    # Plot A_0 for each initial condition
+    for idx, guess in enumerate(initial_conditions_list):
         parameters_tuple = (n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates, a_tot_parameter, x_tot_parameter, y_tot_parameter)
-        phosphorylation_system_solver(parameters_tuple, np.array(guess), final_t)
+        t_sol, a_0_sol = phosphorylation_system_solver(parameters_tuple, np.array(guess), final_t)
+        
+        color = cmap(idx / len(initial_conditions_list))
+        plt.plot(t_sol, a_0_sol, lw=1, alpha=1, color = color)
+    
+    plt.ylabel("$[A_0]$")
+    plt.xlabel("time")
+    # plt.xscale('log')
+    # plt.yscale('log')
+    plt.title(f"$A_0$ dynamics for n = {n} with different initial conditions")
+    plt.minorticks_on()
+    plt.xlim(0 - 0.1, final_t + 0.1)
+    plt.ylim(-0.01, 1.01)
+    plt.tight_layout()
+    # plt.legend(frameon=False, ncol=2, fontsize=8)
+    plt.show()
 
 def main():
-    file_name = "multistability_parameters_1500_2.pkl"
+    file_name = "multistability_parameters_4000_4.pkl"
 
-    index = 1
+    index = 5
 
-    final_t = 10000000
+    final_t = 5000
     plotter(index, final_t, file_name)
 
 if __name__ == "__main__":

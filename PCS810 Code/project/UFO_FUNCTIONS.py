@@ -415,6 +415,9 @@ def main():
     plt.xlabel(f'k')
     plt.ylabel('$k^w_{nn} (k)$')
     plt.show()
+    clustering = [nx.clustering(ufo_network, node) for node in ufo_network]
+    plt.scatter(k_array, clustering)
+    plt.show()
     # plt.legend()
     # plt.show()
     # plt.plot(times_list, avg_clustering_list)

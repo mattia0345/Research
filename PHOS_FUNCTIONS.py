@@ -266,7 +266,7 @@ class all_parameter_generation:
 
 
 def guess_generator(n, a_tot, x_tot, y_tot):
-    # N = n + 1
+
     N = 2**n
 
     bx_splits = sorted([random.uniform(0, x_tot) for _ in range(N - 1)])
@@ -331,7 +331,7 @@ def matrix_normalize(matrix: np.ndarray) -> np.ndarray:
     non_zero_mask = normalized != 0
     non_zero_elements = normalized[non_zero_mask]
     mean_non_zero = non_zero_elements.mean()
-    normalized[non_zero_mask] = normalized[non_zero_mask] / mean_non_zero
+    # normalized[non_zero_mask] = normalized[non_zero_mask] / mean_non_zero
     return normalized
 
 def pertubation_array_creation(ic_array, pertubation_parameter):

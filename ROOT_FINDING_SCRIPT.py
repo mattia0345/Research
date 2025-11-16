@@ -11,20 +11,20 @@ import numpy as np
 from scipy.stats import reciprocal
 from scipy.optimize import root
 from scipy.optimize import approx_fprime
-from PHOS_FUNCTIONS import MATTIA_FULL
+from PHOS_FUNCTIONS import MATTIA_FULL, MATTIA_FULL_ROOT_JACOBIAN
 from PHOS_FUNCTIONS import MATRIX_FINDER, guess_generator, matrix_sample_reciprocal
 from PHOS_FUNCTIONS import duplicate, matrix_clip, all_parameter_generation
 
-def MATTIA_FULL_ROOT_JACOBIAN(state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
-    """Compute the Jacobian of MATTIA_FULL_ROOT numerically"""
-    def mattia_full_wrapper(state):
-        return MATTIA_FULL_ROOT(state, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
+# def MATTIA_FULL_ROOT_JACOBIAN(state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
+#     """Compute the Jacobian of MATTIA_FULL_ROOT numerically"""
+#     def mattia_full_wrapper(state):
+#         return MATTIA_FULL_ROOT(state, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
     
-    jacobian_mattia_full = np.array([
-        approx_fprime(state_array, lambda s: mattia_full_wrapper(s)[i], epsilon=1e-8)
-        for i in range(len(state_array))])
+#     jacobian_mattia_full = np.array([
+#         approx_fprime(state_array, lambda s: mattia_full_wrapper(s)[i], epsilon=1e-8)
+#         for i in range(len(state_array))])
     
-    return jacobian_mattia_full
+#     return jacobian_mattia_full
 
 def MATTIA_FULL_ROOT(state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
 
@@ -64,33 +64,57 @@ def root_finder(n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
     red_sol_list_stable = []
     red_sol_list_unstable = []
     N = 2**n
-
-    guesses = []
     red_eigenvalues_real_list = []
-    guesses.append(1e-14*np.ones(3*N - 3))
-    guesses.append(np.concatenate([np.array([1-1e-14]), np.zeros(3*N-4)]))
-    attempt_total_num = 8
-    guesses = []
+    attempt_total_num = 20
 
+    guesses = []
     guesses.append(np.zeros(3*N - 3))
     guesses.append(1e-5*np.ones(3*N - 3))
     guesses.append(np.concatenate([np.array([1]), np.zeros(3*N-4)]))
 
-    for i in range(5):
+    # THIS SEEMS TO REALLY HELP THE ROOT FINDER FIND ROOTS
+    for i in range(10):
         t = np.random.rand(N)
         t /= t.sum()
         t = t[:-1]
         guesses.append(np.concatenate([t, np.zeros(2*N-2)]))
 
-    for i in range(attempt_total_num):
-        guesses.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
+    for i in range(10):
         guesses.append(guess_generator(n, a_tot, x_tot, y_tot))
 
-    root_tol = 1e-6
+    a_0_ic = np.linspace(1e-5, a_tot - 1e-5, attempt_total_num)
+    for i in a_0_ic:
+        guesses.append(np.concatenate([np.array([i]), np.zeros(3*N-4)]))
+
+    # guesses = []
+    # red_eigenvalues_real_list = []
+    # guesses.append(1e-14*np.ones(3*N - 3))
+    # guesses.append(np.concatenate([np.array([1-1e-14]), np.zeros(3*N-4)]))
+    # attempt_total_num = 8
+    # guesses = []
+
+    # guesses.append(np.zeros(3*N - 3))
+    # guesses.append(1e-5*np.ones(3*N - 3))
+    # guesses.append(np.concatenate([np.array([1]), np.zeros(3*N-4)]))
+
+    # for i in range(5):
+    #     t = np.random.rand(N)
+    #     t /= t.sum()
+    #     t = t[:-1]
+    #     guesses.append(np.concatenate([t, np.zeros(2*N-2)]))
+
+    # for i in range(attempt_total_num):
+    #     guesses.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
+    #     guesses.append(guess_generator(n, a_tot, x_tot, y_tot))
+
+    # root_tol = 1e-6
+    # residual_tol = 1e-8
+    # euclidian_distance_tol = 1e-6
+    # eigen_value_tol = 1e-6
+    root_tol = 1e-8
     residual_tol = 1e-8
-    euclidian_distance_tol = 1e-6
-    eigen_value_tol = 1e-6
-    
+    euclidian_distance_tol = 1e-1
+    eigen_value_tol = 1e-12
     for guess in guesses:
         # assert np.any(np.array(guess) <= 0), f"Guess {guess} is non-physical"
         assert len(guess) == 3*N - 3, f"Guess {guess} is incorrect length"
@@ -181,12 +205,25 @@ def process_sample_script(i,
     p_negative_rates = p_negative_parameter_array[i]
     rate_min, rate_max = 1e-1, 1e7
     
-    k_positive_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
-    k_negative_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
-    p_positive_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
-    p_negative_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
-    alpha_matrix = matrix_sample_reciprocal(alpha_matrix, rate_min, rate_max)
-    beta_matrix = matrix_sample_reciprocal(beta_matrix, rate_min, rate_max)
+    # k_positive_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
+    # k_negative_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
+    # p_positive_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
+    # p_negative_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
+    # alpha_matrix = matrix_sample_reciprocal(alpha_matrix, rate_min, rate_max)
+    # beta_matrix = matrix_sample_reciprocal(beta_matrix, rate_min, rate_max)
+
+    k_positive_rates = np.array([8.40651484e+03, 5.48882357e-01, 2.63713975e+01])
+    k_negative_rates = np.array([1.32637580e-01, 9.14787266e-01, 8.89557552e+03])
+    p_positive_rates = np.array([7.41708599e+02, 1.47870389e+02, 5.91384022e-01])
+    p_negative_rates = np.array([13718.10403978, 57.50142864, 138.89310632])
+    alpha_matrix = np.array([[0.00000000e+00, 1.33367372e-01, 4.06884060e+00, 0.00000000e+00],
+                                [0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 7.33189760e-01],
+                                [0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 5.88500142e+04],
+                                [0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00]])
+    beta_matrix = np.array([[0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00],
+                            [1.60769298e+06, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00],
+                            [1.53528882e+01, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00],
+                            [0.00000000e+00, 1.73856212e+02, 3.07486110e+05, 0.00000000e+00]])
 
     multistable_results = None
     
@@ -218,8 +255,8 @@ def process_sample_script(i,
 
 def simulation_root(n, simulation_size):
     a_tot = 1
-    x_tot = 1e-2
-    y_tot = 1e-2
+    x_tot = 1e-3
+    y_tot = 1e-3
     old_best_gamma_parameters = (0.123, 4.46e6)
     new_gamma_parameters = (1, 10)
     gen_rates = all_parameter_generation(n, "distributive", "gamma", new_gamma_parameters, verbose = False)
@@ -264,7 +301,7 @@ def simulation_root(n, simulation_size):
 
 def main():
     n = 2
-    simulation_root(n, 1000)
+    simulation_root(n, 500)
     
 if __name__ == "__main__":
     main()

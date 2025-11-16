@@ -3,16 +3,112 @@ from typing import List, Tuple, Dict, Any, Set
 import random as rnd
 from scipy.stats import levy
 import random as random
-from scipy.linalg import lu_factor, lu_solve
 from scipy.stats import reciprocal
+
+def MATTIA_FULL_ROOT_JACOBIAN(state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
+    N = 2**n
+    assert len(state_array) == 3*N - 3
+    
+    a_red = state_array[0: N - 1]
+    b = state_array[N - 1: 2*N - 2]
+    c = state_array[2*N - 2: 3*N - 3]
+
+    a = np.concatenate([a_red, [a_tot - np.sum(a_red) - np.sum(b) - np.sum(c)]])
+    x = x_tot - np.sum(b)
+    y = y_tot - np.sum(c)
+
+    # We need to compute the Jacobian of:
+    # a_dot_red = (G @ b + H @ c - x * Kp @ a - y * Pp @ a)[0:N-1]
+    # b_dot = x * Q @ a - M_mat @ b
+    # c_dot = y * D @ a - N_mat @ c
+    
+    # First, let's establish how a, x, y depend on the state variables:
+    # a[i] = a_red[i] for i < N-1
+    # a[N-1] = a_tot - sum(a_red) - sum(b) - sum(c)
+    # x = x_tot - sum(b)
+    # y = y_tot - sum(c)
+    
+    # Create derivative matrices for a, x, y w.r.t. state_array
+    # da/d(state_array): shape (N, 3N-3)
+    da_dstate = np.zeros((N, 3*N - 3))
+    # First N-1 rows: da[i]/da_red[j] = delta[i,j]
+    da_dstate[0:N-1, 0:N-1] = np.eye(N-1)
+    # Last row: da[N-1]/da_red[j] = -1, da[N-1]/db[j] = -1, da[N-1]/dc[j] = -1
+    da_dstate[N-1, :] = -1
+    
+    # dx/d(state_array): shape (1, 3N-3)
+    dx_dstate = np.zeros((1, 3*N - 3))
+    dx_dstate[0, N-1:2*N-2] = -1  # dx/db[j] = -1
+    
+    # dy/d(state_array): shape (1, 3N-3)
+    dy_dstate = np.zeros((1, 3*N - 3))
+    dy_dstate[0, 2*N-2:3*N-3] = -1  # dy/dc[j] = -1
+    
+    # Now compute the Jacobian for each output block
+    
+    # === Block 1: d(a_dot_red)/d(state_array) ===
+    # a_dot = G @ b + H @ c - x * Kp @ a - y * Pp @ a
+    # We need first N-1 rows
+    
+    # Term 1: d(G @ b)/d(state_array)
+    # G @ b depends only on b
+    term1 = np.zeros((N, 3*N - 3))
+    term1[:, N-1:2*N-2] = G  # d(G @ b)/db = G
+    
+    # Term 2: d(H @ c)/d(state_array)
+    term2 = np.zeros((N, 3*N - 3))
+    term2[:, 2*N-2:3*N-3] = H  # d(H @ c)/dc = H
+    
+    # Term 3: d(-x * Kp @ a)/d(state_array)
+    # = -x * Kp @ (da/dstate) - (dx/dstate) * (Kp @ a)^T
+    Kp_a = Kp @ a  # shape (N,)
+    term3 = -x * Kp @ da_dstate - np.outer(Kp_a, dx_dstate[0, :])
+    
+    # Term 4: d(-y * Pp @ a)/d(state_array)
+    # = -y * Pp @ (da/dstate) - (dy/dstate) * (Pp @ a)^T
+    Pp_a = Pp @ a  # shape (N,)
+    term4 = -y * Pp @ da_dstate - np.outer(Pp_a, dy_dstate[0, :])
+    
+    # Combine and take first N-1 rows
+    J_a_dot_red = (term1 + term2 + term3 + term4)[0:N-1, :]
+    
+    # === Block 2: d(b_dot)/d(state_array) ===
+    # b_dot = x * Q @ a - M_mat @ b
+    
+    # Term 1: d(x * Q @ a)/d(state_array)
+    # = x * Q @ (da/dstate) + (dx/dstate) * (Q @ a)^T
+    Q_a = Q @ a  # shape (N-1,)
+    term1_b = x * Q @ da_dstate + np.outer(Q_a, dx_dstate[0, :])
+    
+    # Term 2: d(-M_mat @ b)/d(state_array)
+    term2_b = np.zeros((N-1, 3*N - 3))
+    term2_b[:, N-1:2*N-2] = -M_mat
+    
+    J_b_dot = term1_b + term2_b
+    
+    # === Block 3: d(c_dot)/d(state_array) ===
+    # c_dot = y * D @ a - N_mat @ c
+    
+    # Term 1: d(y * D @ a)/d(state_array)
+    # = y * D @ (da/dstate) + (dy/dstate) * (D @ a)^T
+    D_a = D @ a  # shape (N-1,)
+    term1_c = y * D @ da_dstate + np.outer(D_a, dy_dstate[0, :])
+    
+    # Term 2: d(-N_mat @ c)/d(state_array)
+    term2_c = np.zeros((N-1, 3*N - 3))
+    term2_c[:, 2*N-2:3*N-3] = -N_mat
+    
+    J_c_dot = term1_c + term2_c
+    
+    # Combine all blocks
+    J = np.vstack([J_a_dot_red, J_b_dot, J_c_dot])
+    
+    return J
 
 def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates):
 
-    # N = n + 1
     N = 2**n
     ones_vec = np.ones(N - 1)
-    # ones_vec = np.ones((1, N - 1))
-    # ones_vec = np.ones((1, N-1), dtype = float) # shape (1, N-1)
 
     Kp = np.diag(np.append(k_positive_rates, 0))
     Km = np.append(np.diag(k_negative_rates), np.zeros((1, len(k_negative_rates))), axis=0)
@@ -23,16 +119,11 @@ def MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rat
     Pm = np.vstack([np.zeros((1, len(p_negative_rates))), np.diag(p_negative_rates)])    # print("a", a)
     assert Pp.shape == (N, N), f"Pp shape must be ({N}, {N})"
     assert Pm.shape == (N, N-1), f"Pm shape must be ({N}, {N-1})"
-    # print("Kp")
-    # print(np.asarray(Kp, dtype = float))
-    # print("Pp")
-    # print(Pp)
+
     adjusted_alpha_mat = np.delete(alpha_matrix, -1, axis = 0)
-    # print("adjusted_alpha_mat.T")
-    # print(adjusted_alpha_mat.T)
+
     adjusted_beta_mat = np.delete(beta_matrix, 0, axis = 0)
-    # print("adjusted_beta_mat.T")
-    # print(adjusted_beta_mat.T)
+
     assert adjusted_alpha_mat.shape == (N-1, N), f"adjusted_alpha_mat shape must be ({N-1}, {N})"
     assert adjusted_beta_mat.shape == (N-1, N), f"adjusted_beta_mat shape must be ({N-1}, {N})"
 
@@ -105,14 +196,13 @@ def MATTIA_FULL(t, state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, 
 
     a_dot_red = a_dot[0: N-1]
 
-    # zero_threshold = 1e-15
-    # # below_mask = a_red < zero_threshold
-    # a_dot_red = np.where(a_red < zero_threshold, np.maximum(a_dot_red, 0), a_dot_red)
-    # b_dot = np.where(b < zero_threshold, np.maximum(b_dot, 0), b_dot)
-    # c_dot = np.where(c < zero_threshold, np.maximum(c_dot, 0), c_dot)
+    zero_threshold = 1e-15
+    # below_mask = a_red < zero_threshold
+    a_dot_red = np.where(a_red < zero_threshold, np.maximum(a_dot_red, 0), a_dot_red)
+    b_dot = np.where(b < zero_threshold, np.maximum(b_dot, 0), b_dot)
+    c_dot = np.where(c < zero_threshold, np.maximum(c_dot, 0), c_dot)
 
     return np.concatenate([a_dot_red, b_dot, c_dot])
-
 
 class all_parameter_generation:
     """
@@ -264,7 +354,6 @@ class all_parameter_generation:
 
         return x_tot_concentration, y_tot_concentration
 
-
 def guess_generator(n, a_tot, x_tot, y_tot):
 
     N = 2**n
@@ -305,13 +394,6 @@ def duplicate(candidate, collection, euclidian_distance_tol):
             return True
     return False
 
-def matrix_clip(matrix, rate_min, rate_max):
-
-    clipped = matrix.copy()
-    mask = clipped != 0
-    clipped[mask] = np.clip(clipped[mask], rate_min, rate_max)
-    return clipped
-
 def matrix_sample_reciprocal(matrix, rate_min, rate_max):
 
     sampled_matrix = matrix.copy()
@@ -333,15 +415,6 @@ def matrix_normalize(matrix: np.ndarray) -> np.ndarray:
     mean_non_zero = non_zero_elements.mean()
     # normalized[non_zero_mask] = normalized[non_zero_mask] / mean_non_zero
     return normalized
-
-def pertubation_array_creation(ic_array, pertubation_parameter):
-    # find the 2 indices with the largest elements, create a pertubation array
-    largest_index = np.argsort(ic_array)[-2:][-2]
-    second_largest_index = np.argsort(ic_array)[-2:][-1]
-    if rnd.random() > 0.5:
-        return np.array([-pertubation_parameter if i == largest_index else pertubation_parameter if i == second_largest_index else 0 for i in range(len(ic_array))])
-    else: 
-        return np.array([pertubation_parameter if i == largest_index else -pertubation_parameter if i == second_largest_index else 0 for i in range(len(ic_array))])
 
 def main():
     n = 2

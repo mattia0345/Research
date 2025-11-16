@@ -12,8 +12,158 @@ from scipy.differentiate import jacobian
 from scipy.stats import reciprocal
 from numpy import linalg as LA
 from sklearn.cluster import DBSCAN
-from PHOS_FUNCTIONS import MATRIX_FINDER, MATTIA_FULL, guess_generator, matrix_clip, matrix_normalize, matrix_sample_reciprocal
+import multiprocessing
+import time as time
+import threading
+from multiprocessing import Process, Queue
+from PHOS_FUNCTIONS import MATRIX_FINDER, MATTIA_FULL, guess_generator, matrix_normalize, matrix_sample_reciprocal
 from PHOS_FUNCTIONS import duplicate, all_parameter_generation
+
+# def _solver_worker(queue, parameters_tuple, initial_states_array, final_t, 
+#                    abstol, reltol, method):
+#     """Worker function that runs in a separate process"""
+#     try:
+#         n, a_tot, _, _, _, _, _, _, _, _, _, _ = parameters_tuple
+#         N = 2**n
+#         initial_t = 0
+#         t_span = (initial_t, final_t)
+        
+#         # Use stable_event only (no timeout event - that's handled by process termination)
+#         sol = solve_ivp(
+#             MATTIA_FULL,
+#             t_span=t_span,
+#             y0=np.asarray(initial_states_array, dtype=float),
+#             events=stable_event,
+#             args=parameters_tuple,
+#             method=method,
+#             atol=abstol,
+#             rtol=reltol,
+#             dense_output=False,  # Don't store dense output to save memory
+#             max_step=np.inf  # Allow large steps if needed
+#         )
+        
+#         # Put result in queue
+#         result = {
+#             'success': True,
+#             'y': sol.y,
+#             't': sol.t,
+#             'message': sol.message,
+#             'status': sol.status,
+#             't_events': sol.t_events,
+#             'final_state': sol.y.T[-1] if sol.y.size > 0 else np.full((3*N - 3,), np.nan)
+#         }
+#         queue.put(result)
+        
+#     except Exception as e:
+#         # Put error in queue
+#         n, a_tot, _, _, _, _, _, _, _, _, _, _ = parameters_tuple
+#         N = 2**n
+#         result = {
+#             'success': False,
+#             'error': str(e),
+#             'final_state': np.full((3*N - 3,), np.nan)
+#         }
+#         queue.put(result)
+
+def MATTIA_FULL_ROOT_JACOBIAN(t, state_array, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
+    N = 2**n
+    assert len(state_array) == 3*N - 3
+    
+    a_red = state_array[0: N - 1]
+    b = state_array[N - 1: 2*N - 2]
+    c = state_array[2*N - 2: 3*N - 3]
+
+    a = np.concatenate([a_red, [a_tot - np.sum(a_red) - np.sum(b) - np.sum(c)]])
+    x = x_tot - np.sum(b)
+    y = y_tot - np.sum(c)
+
+    # We need to compute the Jacobian of:
+    # a_dot_red = (G @ b + H @ c - x * Kp @ a - y * Pp @ a)[0:N-1]
+    # b_dot = x * Q @ a - M_mat @ b
+    # c_dot = y * D @ a - N_mat @ c
+    
+    # First, let's establish how a, x, y depend on the state variables:
+    # a[i] = a_red[i] for i < N-1
+    # a[N-1] = a_tot - sum(a_red) - sum(b) - sum(c)
+    # x = x_tot - sum(b)
+    # y = y_tot - sum(c)
+    
+    # Create derivative matrices for a, x, y w.r.t. state_array
+    # da/d(state_array): shape (N, 3N-3)
+    da_dstate = np.zeros((N, 3*N - 3))
+    # First N-1 rows: da[i]/da_red[j] = delta[i,j]
+    da_dstate[0:N-1, 0:N-1] = np.eye(N-1)
+    # Last row: da[N-1]/da_red[j] = -1, da[N-1]/db[j] = -1, da[N-1]/dc[j] = -1
+    da_dstate[N-1, :] = -1
+    
+    # dx/d(state_array): shape (1, 3N-3)
+    dx_dstate = np.zeros((1, 3*N - 3))
+    dx_dstate[0, N-1:2*N-2] = -1  # dx/db[j] = -1
+    
+    # dy/d(state_array): shape (1, 3N-3)
+    dy_dstate = np.zeros((1, 3*N - 3))
+    dy_dstate[0, 2*N-2:3*N-3] = -1  # dy/dc[j] = -1
+    
+    # Now compute the Jacobian for each output block
+    
+    # === Block 1: d(a_dot_red)/d(state_array) ===
+    # a_dot = G @ b + H @ c - x * Kp @ a - y * Pp @ a
+    # We need first N-1 rows
+    
+    # Term 1: d(G @ b)/d(state_array)
+    # G @ b depends only on b
+    term1 = np.zeros((N, 3*N - 3))
+    term1[:, N-1:2*N-2] = G  # d(G @ b)/db = G
+    
+    # Term 2: d(H @ c)/d(state_array)
+    term2 = np.zeros((N, 3*N - 3))
+    term2[:, 2*N-2:3*N-3] = H  # d(H @ c)/dc = H
+    
+    # Term 3: d(-x * Kp @ a)/d(state_array)
+    # = -x * Kp @ (da/dstate) - (dx/dstate) * (Kp @ a)^T
+    Kp_a = Kp @ a  # shape (N,)
+    term3 = -x * Kp @ da_dstate - np.outer(Kp_a, dx_dstate[0, :])
+    
+    # Term 4: d(-y * Pp @ a)/d(state_array)
+    # = -y * Pp @ (da/dstate) - (dy/dstate) * (Pp @ a)^T
+    Pp_a = Pp @ a  # shape (N,)
+    term4 = -y * Pp @ da_dstate - np.outer(Pp_a, dy_dstate[0, :])
+    
+    # Combine and take first N-1 rows
+    J_a_dot_red = (term1 + term2 + term3 + term4)[0:N-1, :]
+    
+    # === Block 2: d(b_dot)/d(state_array) ===
+    # b_dot = x * Q @ a - M_mat @ b
+    
+    # Term 1: d(x * Q @ a)/d(state_array)
+    # = x * Q @ (da/dstate) + (dx/dstate) * (Q @ a)^T
+    Q_a = Q @ a  # shape (N-1,)
+    term1_b = x * Q @ da_dstate + np.outer(Q_a, dx_dstate[0, :])
+    
+    # Term 2: d(-M_mat @ b)/d(state_array)
+    term2_b = np.zeros((N-1, 3*N - 3))
+    term2_b[:, N-1:2*N-2] = -M_mat
+    
+    J_b_dot = term1_b + term2_b
+    
+    # === Block 3: d(c_dot)/d(state_array) ===
+    # c_dot = y * D @ a - N_mat @ c
+    
+    # Term 1: d(y * D @ a)/d(state_array)
+    # = y * D @ (da/dstate) + (dy/dstate) * (D @ a)^T
+    D_a = D @ a  # shape (N-1,)
+    term1_c = y * D @ da_dstate + np.outer(D_a, dy_dstate[0, :])
+    
+    # Term 2: d(-N_mat @ c)/d(state_array)
+    term2_c = np.zeros((N-1, 3*N - 3))
+    term2_c[:, 2*N-2:3*N-3] = -N_mat
+    
+    J_c_dot = term1_c + term2_c
+    
+    # Combine all blocks
+    J = np.vstack([J_a_dot_red, J_b_dot, J_c_dot])
+    
+    return J
 
 def stable_event(t, state_array, *args):
     n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat = args
@@ -39,93 +189,176 @@ def stable_event(t, state_array, *args):
 stable_event.terminal = True
 stable_event.direction = 0
 
-def phosphorylation_system_solver(parameters_tuple, initial_states_array, final_t, plot):
-
+def phosphorylation_system_solver(parameters_tuple,
+                                  initial_states_array,
+                                  final_t,
+                                  plot,
+                                  timeout_seconds: float = 15.0):
+    """
+    Solver with timeout using threading.
+    Compatible with joblib's loky backend.
+    """
     n, a_tot, _, _, _, _, _, _, _, _, _, _ = parameters_tuple
-    # N = n + 1
     N = 2**n
     assert np.all(initial_states_array >= 0)
+    assert len(initial_states_array) == 3*N - 3
 
     initial_t = 0
     t_span = (initial_t, final_t)
-    
-    # default
-    # abstol = 1e-20
-    # reltol = 1e-5
     abstol = 1e-6
     reltol = 1e-3
+    method = "LSODA"
 
-    assert len(initial_states_array) == 3*N - 3
-
-    method = 'LSODA'
+    # Shared variables for thread communication
+    result = {'sol': None, 'error': None, 'finished': False}
+    start_time = time.time()
+    
+    def solver_thread():
+        """Thread that runs the solver"""
+        try:
+            sol = solve_ivp(
+                MATTIA_FULL,
+                t_span=t_span,
+                y0=np.asarray(initial_states_array, dtype=float),
+                events=stable_event,
+                args=parameters_tuple,
+                method=method,
+                atol=abstol,
+                rtol=reltol,
+                dense_output=False,
+            )
+            result['sol'] = sol
+            result['finished'] = True
+        except Exception as e:
+            result['error'] = str(e)
+            result['finished'] = True
+    
+    # Start solver in separate thread
+    thread = threading.Thread(target=solver_thread, daemon=True)
+    thread.start()
+    
+    # Wait for completion or timeout
+    thread.join(timeout=timeout_seconds)
+    elapsed = time.time() - start_time
+    
+    # Check if thread is still alive (timeout)
+    if thread.is_alive():
+        # print(f"Integration TIMEOUT after {elapsed:.2f}s (thread still running).")
+        # Note: We can't forcibly stop the thread, but marking it as daemon
+        # means it won't prevent program exit
+        return np.full((3*N - 3,), np.nan, dtype=float)
+    
+    # Check for errors
+    if result['error'] is not None:
+        # print(f"Integration error: {result['error']}")
+        return np.full((3*N - 3,), np.nan, dtype=float)
+    
+    # Check if solver finished
+    if not result['finished'] or result['sol'] is None:
+        # print("Integration did not complete properly.")
+        return np.full((3*N - 3,), np.nan, dtype=float)
+    
+    sol = result['sol']
+    
+    # Determine how solver stopped
+    stable_hit = False
+    if sol.t_events is not None and len(sol.t_events) > 0:
+        if sol.t_events[0] is not None and len(sol.t_events[0]) > 0:
+            stable_hit = True
+    
+    # if stable_hit:
+    #     print(f"Integration converged (stable_event) in {elapsed:.2f}s.")
+    # else:
+    #     print(f"Integration completed normally in {elapsed:.2f}s. Status: {sol.message}")
+    
+    # Return final state
     try:
-        sol = solve_ivp(MATTIA_FULL, t_span = t_span, y0=np.asarray(initial_states_array, dtype=float),
-            events = stable_event, args = parameters_tuple, method = method, 
-            atol = abstol, rtol = reltol)
-    except ValueError as e:
-        sol = solve_ivp(MATTIA_FULL, t_span = t_span, y0=np.asarray(initial_states_array, dtype=float),
-            args = parameters_tuple, method = method, 
-            atol = abstol, rtol = reltol)
+        return sol.y.T[-1]
+    except Exception:
+        return np.full((3*N - 3,), np.nan, dtype=float)
+    # try:
+    #     sol = solve_ivp(
+    #         MATTIA_FULL,
+    #         t_span=t_span,
+    #         y0=np.asarray(initial_states_array, dtype=float),
+    #         events=(stable_event, timeout_event),
+    #         args=parameters_tuple,
+    #         method=method,
+    #         atol=abstol,
+    #         rtol=reltol,
+    #     )
+    # except ValueError:
+    #     # fallback without events if LSODA/event combination raised ValueError
+    #     sol = solve_ivp(
+    #         MATTIA_FULL,
+    #         t_span=t_span,
+    #         y0=np.asarray(initial_states_array, dtype=float),
+    #         args=parameters_tuple,
+    #         method=method,
+    #         atol=abstol,
+    #         rtol=reltol,
+    #     )
 
-    if plot == True:
-        cmap = plt.get_cmap('Accent')
-        def color_for_species(idx):
-            return cmap(idx / (3 * N - 3))  # smooth gradient of distinct colors
-        a_solution_stack = np.stack([sol.y[i] for i in range(0, N - 1)])
-        b_solution_stack = np.stack([sol.y[i] for i in range(N-1, 2*N - 2)]) 
-        c_solution_stack = np.stack([sol.y[i] for i in range(2*N - 2, 3*N - 3)])
-        a_N_array = a_tot - np.sum(a_solution_stack, axis=0) - np.sum(b_solution_stack, axis = 0) - np.sum(c_solution_stack, axis=0)
+    # # sol.message is informative
+    # print(sol.message)
 
-        plt.figure(figsize = (8, 6))
-        plt.style.use('seaborn-v0_8-whitegrid')
-        for i in range(a_solution_stack.shape[0]):
-            color = color_for_species(i)
-            plt.plot(sol.t, a_solution_stack[i], color=color, label = f"[$A_{i}]$", lw=4, alpha = 0.9)
-            # print(f"final A_{i} = {a_solution_stack[i][-1]}")
-            plt.title(f"Plotting reduced phosphorylation dynamics for n = {n}")
+    # # determine how the solver stopped
+    # timed_out = False
+    # stable_hit = False
+    # # sol.t_events is a list corresponding to the order of events passed
+    # if sol.t_events is not None:
+    #     # sol.t_events[0] corresponds to stable_event, sol.t_events[1] to timeout_event
+    #     if len(sol.t_events) >= 2:
+    #         if sol.t_events[1] is not None and len(sol.t_events[1]) > 0:
+    #             timed_out = True
+    #         if sol.t_events[0] is not None and len(sol.t_events[0]) > 0:
+    #             stable_hit = True
 
-        color_N = color_for_species(N-1)
-        plt.plot(sol.t, a_N_array, color=color_N, label=f"$[A_{{{N-1}}}]$", lw=4, alpha=0.9)
-        plt.ylabel("concentration")
-        plt.xlabel("time")
-        plt.minorticks_on()
-        plt.tight_layout()
-        if sol.status == 1:
-            plt.xlim(t_span[0] - 0.1, sol.t_events[0][0] + 0.1)
-        else:
-            plt.xlim(t_span[0] - 0.1, t_span[0] + 0.1)
-        plt.ylim(-0.05, 1.1)
-        plt.legend(frameon=False)
-        plt.show()
+    # if timed_out:
+    #     print(f"Integration stopped because timeout_event fired after ~{timeout_seconds} s.")
+    # elif stable_hit:
+    #     print("Integration stopped because stable_event fired (converged).")
+    # else:
+    #     print("Integration ended normally (t reached final_t or solver terminated for other reason).")
 
-    return sol.y.T[-1]
+    # # plotting code: you can reuse your existing plotting block; use sol.y / sol.t
+
+    # # return last state (same as previously)
+    # try:
+    #     return sol.y.T[-1]
+    # except Exception:
+    #     return np.full((3*N - 3,), np.nan, dtype=float)
 
 def fp_finder(n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
 
     N = 2**n
 
+    fp = []
     # norm_tol = 0.00001
-    final_t = 100000000
+    final_t = 500000
     stable_points = []
     plot = False
-
-    attempt_total_num = 8
+    euclidian_distance_tol = 1e-1
+    attempt_total_num = 20
     guesses = []
     # guesses.append(1e-14*np.ones(3*N - 3))
     # guesses.append(np.concatenate([np.array([1-1e-14]), np.zeros(3*N-4)]))
-    guesses.append(np.zeros(3*N - 3))
-    guesses.append(1e-5*np.ones(3*N - 3))
-    guesses.append(np.concatenate([np.array([1]), np.zeros(3*N-4)]))
+    # guesses.append(np.zeros(3*N - 3))
+    # guesses.append(1e-5*np.ones(3*N - 3))
+    # guesses.append(np.concatenate([np.array([1]), np.zeros(3*N-4)]))
 
-    for i in range(5):
-        t = np.random.rand(N)
-        t /= t.sum()
-        t = t[:-1]
-        guesses.append(np.concatenate([t, np.zeros(2*N-2)]))
+    a_0_ic = np.linspace(1e-20, a_tot - 1e-20, attempt_total_num)
+    for ic in a_0_ic:
+        guesses.append(np.concatenate([np.array([ic]), np.zeros(3*N-4)]))
+    # for i in range(5):
+    #     t = np.random.rand(N)
+    #     t /= t.sum()
+    #     t = t[:-1]
+    #     guesses.append(np.concatenate([t, np.zeros(2*N-2)]))
 
-    for i in range(attempt_total_num):
-        guesses.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
-        guesses.append(guess_generator(n, a_tot, x_tot, y_tot))
+    # for i in range(attempt_total_num):
+    #     guesses.append(np.concatenate([np.array([random.random()]), np.zeros(3*N-4)]))
+    #     guesses.append(guess_generator(n, a_tot, x_tot, y_tot))
 
 
     for guess in guesses:
@@ -145,13 +378,21 @@ def fp_finder(n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
             continue
 
         zero_tol = 1e-8
-        if np.any(reduced_sol < -zero_tol):
+        if np.any(reduced_sol < -zero_tol) or np.any(reduced_sol > 1 + zero_tol):
             # print(reduced_sol)
             print("Non-physical fixed point.")
             continue
 
-        def mattia_full_wrapper(state):
-            return MATTIA_FULL(0, state, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
+        is_duplicate = False
+
+        for r in fp:
+            if np.linalg.norm(reduced_sol - r) <= euclidian_distance_tol:
+                is_duplicate = True
+                break
+        if is_duplicate:
+            continue
+        # def mattia_full_wrapper(state):
+        #     return MATTIA_FULL(0, state, n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat)
 
         # jacobian_mattia_full = np.array([
         #     approx_fprime(reduced_sol, lambda s: mattia_full_wrapper(s)[i], epsilon=1e-8)
@@ -165,21 +406,33 @@ def fp_finder(n, a_tot, x_tot, y_tot, Kp, Pp, G, H, Q, M_mat, D, N_mat):
         #     # print("Duplicate found, skipping")
         #     continue
 
+        fp.append(reduced_sol)
+
         stable_points.append(reduced_sol)
 
-    stable_points = np.array(stable_points)  # shape (num_trials, n_variables)
+    # if len(stable_points) == 0:
+    #     print("No valid steady states found.")
+    #     return np.array([])
+    
+    # stable_points = np.array(stable_points)  # shape (num_trials, n_variables)
 
-    db = DBSCAN(eps=1e-5, min_samples=1).fit(stable_points)
-    labels = db.labels_
+    # db = DBSCAN(eps=1e-1, min_samples=1).fit(stable_points)
+    # labels = db.labels_
 
-    # Extract representative points
-    unique_points = np.array([stable_points[labels == i][0] for i in np.unique(labels)])
-    print(f"Found {len(unique_points)} unique steady states.")
+    # # Extract representative points
+    # unique_points = np.array([stable_points[labels == i][0] for i in np.unique(labels)])
+    # print(f"Found {len(unique_points)} unique steady states.")
 
-    if len(unique_points) == 0:
+    print(f"Found {len(fp)} unique steady states.")
+
+    if len(fp) == 0:
         return np.array([])
             
-    return unique_points
+    return np.array(fp)
+    # if len(unique_points) == 0:
+    #     return np.array([])
+            
+    # return unique_points
 
 def process_sample_script(i,
                    n,
@@ -205,33 +458,26 @@ def process_sample_script(i,
 
     rate_min, rate_max = 1e-1, 1e7
 
-    # k_positive_rates = k_positive_rates / np.mean(k_positive_rates)
-    # k_negative_rates = k_negative_rates / np.mean(k_negative_rates)
-    # p_positive_rates = p_positive_rates / np.mean(p_positive_rates)
-    # p_negative_rates = p_negative_rates / np.mean(p_negative_rates)
-    # alpha_matrix = matrix_normalize(alpha_matrix)
-    # beta_matrix = matrix_normalize(beta_matrix)
-
-    # k_positive_rates = np.clip(k_positive_rates, rate_min, rate_max)
-    # k_negative_rates = np.clip(k_negative_rates, rate_min, rate_max)
-    # p_positive_rates = np.clip(p_positive_rates, rate_min, rate_max)
-    # p_negative_rates = np.clip(p_negative_rates, rate_min, rate_max)
-    # alpha_matrix = matrix_clip(alpha_matrix, rate_min, rate_max)
-    # beta_matrix = matrix_clip(beta_matrix, rate_min, rate_max)
-    # print("k+:")
-    # print(k_positive_rates)
-    # print("alpha:")
-    # print(alpha_matrix)
     k_positive_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
     k_negative_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
     p_positive_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
     p_negative_rates = reciprocal(a=rate_min, b=rate_max).rvs(size=N-1)
     alpha_matrix = matrix_sample_reciprocal(alpha_matrix, rate_min, rate_max)
     beta_matrix = matrix_sample_reciprocal(beta_matrix, rate_min, rate_max)
-    # print("k+:")
-    # print(k_positive_rates)
-    # print("alpha:")
-    # print(alpha_matrix)
+
+    # k_positive_rates = np.array([8.40651484e+03, 5.48882357e-01, 2.63713975e+01])
+    # k_negative_rates = np.array([1.32637580e-01, 9.14787266e-01, 8.89557552e+03])
+    # p_positive_rates = np.array([7.41708599e+02, 1.47870389e+02, 5.91384022e-01])
+    # p_negative_rates = np.array([13718.10403978, 57.50142864, 138.89310632])
+    # alpha_matrix = np.array([[0.00000000e+00, 1.33367372e-01, 4.06884060e+00, 0.00000000e+00],
+    #                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 7.33189760e-01],
+    #                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 5.88500142e+04],
+    #                             [0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00]])
+    # beta_matrix = np.array([[0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00],
+    #                         [1.60769298e+06, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00],
+    #                         [1.53528882e+01, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00],
+    #                         [0.00000000e+00, 1.73856212e+02, 3.07486110e+05, 0.00000000e+00]])
+    
     multistable_results = None
 
     Kp, Pp, G, H, Q, M_mat, D, N_mat = MATRIX_FINDER(n, alpha_matrix, beta_matrix, k_positive_rates, k_negative_rates, p_positive_rates, p_negative_rates)
@@ -239,12 +485,10 @@ def process_sample_script(i,
     unique_stable_fp_array = fp_finder(n, a_tot_value, x_tot_value, y_tot_value,
                                                     Kp, Pp, G, H, Q, M_mat, D, N_mat)
 
-
     possible_steady_states = np.floor((n + 2) / 2).astype(int)
     print(i)
-    # if 8 >= len(unique_stable_fp_array) == possible_steady_states:
-    # if len(unique_stable_fp_array) == possible_steady_states:
-    if len(unique_stable_fp_array) == 2 or len(unique_stable_fp_array) == 3:
+
+    if len(unique_stable_fp_array) == possible_steady_states or len(unique_stable_fp_array) == 2:
 
         multistable_results = {
         "num_of_stable_states": len(unique_stable_fp_array),
@@ -261,11 +505,11 @@ def process_sample_script(i,
     return multistable_results
 
 def simulation(n, simulation_size):
-    a_tot_value = 1
+    a_tot_value = 1000
     # N = n + 1
     N = 2**n
-    x_tot = 1e-3
-    y_tot = 1e-3
+    x_tot = 1
+    y_tot = 1
     old_shape_parameters = (0.123, 4.46e6)
     shape = 1e-1
     new_shape_parameters = (shape, 1 / shape)
@@ -314,7 +558,7 @@ def simulation(n, simulation_size):
 
 def main():
     n = 4
-    simulation(n, 1000)
+    simulation(n, 500)
     
 if __name__ == "__main__":
     main()
